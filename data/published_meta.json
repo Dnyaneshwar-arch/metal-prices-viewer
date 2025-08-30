@@ -1,0 +1,13 @@
+{
+  "sheet_headings": {
+    "Scrap": "Ferrous scrap Rotterdam export shredded $ per tonne fob Rotterdam",
+    "Scrap-Nhava Sheva": "Steel scrap shredded, index, import, cfr Nhava Sheva, India $/tonne",
+    "Nickel": "Nickel Settlement LME Daily Official $ per tonne",
+    "Cr-LC-0.10%": "Ferro-chrome 0.10C - 62 min Cr United States Free market low carbon duty paid fob Pittsburgh $ per lb Cr",
+    "Molybdenum": "Molybdenum Canned molybdic oxide United States Free market $ per lb Mo in warehouse",
+    "FeCr-pitsburg-0.5%": "Ferro-chrome 0.05C - 65 min Cr low carbon United States Free market duty paid fob Pittsburgh $ per lb Cr",
+    "COKE": "Coke 65 CSR, fob China, $/tonne",
+    "IRON ORE 65% BRAZIL": "Iron ore 65 Fe Brazil-origin fines, cfr Qingdao, $/tonne",
+    "IRON ORE 66% QINGDAO": "Iron ore 66 Fe concentrate, cfr Qingdao, $/tonne"
+  }
+}
