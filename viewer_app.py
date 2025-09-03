@@ -23,6 +23,19 @@ st.markdown(
         font-size: 18px;
         color:#111827;
       }
+
+      /* summary text under the chart */
+      .summary-box{
+        margin-top: 8px;
+        padding: 10px 12px;
+        background:#FAFCFF;
+        border:1px solid #E5EDF7;
+        border-radius: 10px;
+        font-size: 14px;
+        line-height: 1.5;
+        color:#111827;
+      }
+      .summary-box b{ color:#0B5CAB; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -106,6 +119,8 @@ if f.empty:
     st.info("No rows in this range.")
     st.stop()
 
+# ------- Plot -------
+f = f.sort_values("Month")
 f["MonthLabel"] = pd.to_datetime(f["Month"]).dt.strftime("%b %y").str.upper()
 
 def _bar_size(n: int) -> int:
@@ -113,23 +128,61 @@ def _bar_size(n: int) -> int:
     size = int(approx_width / max(1, n) * 0.65)
     return max(8, min(42, size))
 
-# 🔧 Change here: add x-axis title "Months"
 chart = (
     alt.Chart(f)
     .mark_bar(size=_bar_size(len(f)))
     .encode(
-        x=alt.X(
-            "MonthLabel:N",
-            title="Months",          # <-- x-axis title added
-            sort=None,
-            axis=alt.Axis(labelAngle=0),
-        ),
+        # ✅ only change earlier: add x-axis title
+        x=alt.X("MonthLabel:N", title="Months", sort=None, axis=alt.Axis(labelAngle=0)),
         y=alt.Y("Price:Q", title="Price"),
-        tooltip=[
-            alt.Tooltip("MonthLabel:N", title="Month"),
-            alt.Tooltip("Price:Q", format=",.2f"),
-        ],
+        tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
+                 alt.Tooltip("Price:Q", format=",.2f")],
     )
     .properties(height=430)
 )
 st.altair_chart(chart, use_container_width=True)
+
+# ------- Auto summary (2–3 lines) under the chart -------
+def _fmt_money(x: float) -> str:
+    try:
+        return f"${x:,.2f}"
+    except Exception:
+        return str(x)
+
+def _fmt_mon(d) -> str:
+    try:
+        return pd.to_datetime(d).strftime("%b %Y")
+    except Exception:
+        return str(d)
+
+# start/end
+first_row = f.iloc[0]
+last_row = f.iloc[-1]
+start_price = float(first_row["Price"])
+end_price = float(last_row["Price"])
+start_mon = _fmt_mon(first_row["Month"])
+end_mon = _fmt_mon(last_row["Month"])
+
+chg_abs = end_price - start_price
+chg_pct = (chg_abs / start_price * 100.0) if start_price not in (0, None) else 0.0
+arrow = "↑" if chg_abs > 0 else ("↓" if chg_abs < 0 else "→")
+
+# highs/lows
+hi_idx = f["Price"].idxmax()
+lo_idx = f["Price"].idxmin()
+hi_price, hi_mon = float(f.loc[hi_idx, "Price"]), _fmt_mon(f.loc[hi_idx, "Month"])
+lo_price, lo_mon = float(f.loc[lo_idx, "Price"]), _fmt_mon(f.loc[lo_idx, "Month"])
+
+avg_price = float(f["Price"].mean())
+rng = hi_price - lo_price
+n_months = len(f)
+
+summary_html = f"""
+<div class="summary-box">
+  <div><b>{start_mon}</b> to <b>{end_mon}</b>: price moved from <b>{_fmt_money(start_price)}</b> to <b>{_fmt_money(end_price)}</b> ({arrow} {chg_abs:+.2f}, {chg_pct:+.2f}%).</div>
+  <div>Period high was <b>{_fmt_money(hi_price)}</b> in <b>{hi_mon}</b>; low was <b>{_fmt_money(lo_price)}</b> in <b>{lo_mon}</b> (range {_fmt_money(rng)}).</div>
+  <div>Across <b>{n_months}</b> months, the average price was <b>{_fmt_money(avg_price)}</b>. These details auto-update with your date filters.</div>
+</div>
+"""
+
+st.markdown(summary_html, unsafe_allow_html=True)
