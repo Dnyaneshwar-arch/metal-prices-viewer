@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from html import escape
 from typing import List, Dict
+from pathlib import Path
+import re
 
 import altair as alt
 import pandas as pd
@@ -41,8 +43,14 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# ================================
+# TITLE ROW
+# ================================
 st.markdown('<div class="title">Metal Prices Dashboards</div>', unsafe_allow_html=True)
 
+# ================================
+# EXISTING: SCRAP / COMMODITY DASHBOARD (unchanged)
+# ================================
 DEFAULT_START = pd.to_datetime("2025-04-01").date()
 DEFAULT_END = pd.Timestamp.today().date()
 
@@ -128,7 +136,7 @@ def _bar_size(n: int) -> int:
     size = int(approx_width / max(1, n) * 0.65)
     return max(8, min(42, size))
 
-# ➕ tooltip display helper: big numbers => no decimals; small numbers => 2 decimals
+# ➕ tooltip display helper
 def _fmt_tooltip(v):
     try:
         v = float(v)
@@ -146,14 +154,14 @@ chart = (
         y=alt.Y("Price:Q", title="Price"),
         tooltip=[
             alt.Tooltip("MonthLabel:N", title="Month"),
-            alt.Tooltip("PriceTT:N", title="Price"),   # ← shows like: Price $15,325  /  Price $3.05
+            alt.Tooltip("PriceTT:N", title="Price"),
         ],
     )
     .properties(height=430)
 )
 st.altair_chart(chart, use_container_width=True)
 
-# ------- Auto summary (2–3 lines) under the chart -------
+# ------- Auto summary under the chart -------
 def _fmt_money(x: float) -> str:
     try:
         return f"${x:,.2f}"
@@ -166,7 +174,6 @@ def _fmt_mon(d) -> str:
     except Exception:
         return str(d)
 
-# start/end
 first_row = f.iloc[0]
 last_row = f.iloc[-1]
 start_price = float(first_row["Price"])
@@ -178,7 +185,6 @@ chg_abs = end_price - start_price
 chg_pct = (chg_abs / start_price * 100.0) if start_price not in (0, None) else 0.0
 arrow = "↑" if chg_abs > 0 else ("↓" if chg_abs < 0 else "→")
 
-# highs/lows
 hi_idx = f["Price"].idxmax()
 lo_idx = f["Price"].idxmin()
 hi_price, hi_mon = float(f.loc[hi_idx, "Price"]), _fmt_mon(f.loc[hi_idx, "Month"])
@@ -196,3 +202,170 @@ summary_html = f"""
 </div>
 """
 st.markdown(summary_html, unsafe_allow_html=True)
+
+# ================================
+# NEW: BILLET PRICES DASHBOARD
+# ================================
+st.divider()
+st.markdown('<div class="title">Billet Prices</div>', unsafe_allow_html=True)
+
+# ---- helpers for Billet Excel ----
+BILLET_FILE_CANDIDATES = [Path("data") / "Billet cost.xlsx", Path("Billet cost.xlsx")]
+
+# Nice labels shown to users:
+BILLET_SERIES_LABELS = [
+    "Billet Price (Blast Furnace Route)",
+    "Billet Price (Electric Arc Furnace)",
+]
+
+# Actual sheet names inside the Excel (truncated by Excel’s 31-char limit)
+SHEET_NAME_MAP = {
+    "Billet Price (Blast Furnace Route)": "Billet Price (Blast Furnace Rou",
+    "Billet Price (Electric Arc Furnace)": "Billet Price (Electric Arc Furn",
+}
+
+def _find_billet_file() -> Path | None:
+    for p in BILLET_FILE_CANDIDATES:
+        if p.exists():
+            return p
+    return None
+
+def _load_billet_df(series_label: str) -> pd.DataFrame:
+    """
+    Returns a tidy df with columns: Quarter(str), Price(float), QuarterOrder(int), QuarterLabel(str)
+    It auto-detects the 'Quarter' column even if it is spelled differently, and the Price col.
+    """
+    src = _find_billet_file()
+    if not src:
+        st.error("Billet Excel not found. Put **Billet cost.xlsx** in a `data/` folder (preferred) or next to this file.")
+        st.stop()
+
+    sheet_name = SHEET_NAME_MAP[series_label]
+    raw = pd.read_excel(src, sheet_name=sheet_name)
+
+    # Identify columns by fuzzy match
+    quarter_col = next((c for c in raw.columns if re.search(r"q(u)?arter", str(c), re.I)), None)
+    if quarter_col is None:
+        # handle 'Qurter' / 'Qurter -B'
+        quarter_col = next((c for c in raw.columns if re.search(r"qurter", str(c), re.I)), None)
+    price_col = next((c for c in raw.columns if re.search(r"billet.*per.*mt", str(c), re.I)), None)
+
+    if quarter_col is None or price_col is None:
+        st.error("Could not detect columns in billet sheet. Make sure it has a Quarter column and a 'Billet cost per MT' column.")
+        st.stop()
+
+    df0 = raw[[quarter_col, price_col]].rename(columns={quarter_col: "Quarter", price_col: "Price"})
+    df0["Quarter"] = df0["Quarter"].astype(str).str.strip()
+
+    # Build stable order: parse Qx-YYYY or Qx YYYY
+    def _q_order(qs: str) -> int:
+        m = re.search(r"Q(\d)\s*[- ]\s*(\d{4})", qs, flags=re.I)
+        if not m:
+            return 0
+        q = int(m.group(1))
+        y = int(m.group(2))
+        return y * 10 + q
+
+    df0["QuarterOrder"] = df0["Quarter"].apply(_q_order)
+    df0 = df0.sort_values("QuarterOrder")
+    df0["QuarterLabel"] = df0["Quarter"].str.replace("-", " ", regex=False)
+
+    # Clean price
+    df0["Price"] = pd.to_numeric(df0["Price"], errors="coerce")
+    df0 = df0.dropna(subset=["Price"])
+    return df0
+
+def _fmt_int(n: float) -> str:
+    try:
+        return f"{float(n):,.0f}"
+    except Exception:
+        return str(n)
+
+# --- UI: which series?
+series_label = st.selectbox(
+    "Select Billet Series",
+    BILLET_SERIES_LABELS,
+    index=0,
+    key="billet-series",
+)
+
+billet_df_full = _load_billet_df(series_label)
+if billet_df_full.empty:
+    st.info("No billet rows.")
+    st.stop()
+
+# Defaults for quarter range
+quarters = billet_df_full["QuarterLabel"].tolist()
+q_start_def, q_end_def = quarters[0], quarters[-1]
+
+kq_from = f"billet-from-{series_label}"
+kq_to = f"billet-to-{series_label}"
+st.session_state.setdefault(kq_from, q_start_def)
+st.session_state.setdefault(kq_to, q_end_def)
+
+# --- Filter form (quarter range)
+with st.form(key=f"billet-form-{series_label}", border=False):
+    c1, c2, c3, c4 = st.columns([2.6, 2.6, 0.6, 0.6], gap="small")
+    c1.selectbox("From Quarter", options=quarters, index=0, key=kq_from)
+    c2.selectbox("To Quarter", options=quarters, index=len(quarters) - 1, key=kq_to)
+    with c3:
+        st.markdown('<div style="height:30px;"></div>', unsafe_allow_html=True)
+        btn_go = st.form_submit_button("Search")
+    with c4:
+        st.markdown('<div style="height:30px;"></div>', unsafe_allow_html=True)
+        btn_clear = st.form_submit_button("Clear")
+
+if btn_clear:
+    st.session_state[kq_from] = q_start_def
+    st.session_state[kq_to] = q_end_def
+    st.rerun()
+
+q_from = st.session_state[kq_from]
+q_to = st.session_state[kq_to]
+
+# Slice the chosen range
+i_from = quarters.index(q_from)
+i_to = quarters.index(q_to)
+if i_from > i_to:
+    st.error("From Quarter must be ≤ To Quarter.")
+    st.stop()
+
+billet_df = billet_df_full.iloc[i_from : i_to + 1].copy()
+if billet_df.empty:
+    st.info("No rows in this quarter range.")
+    st.stop()
+
+# --- Chart
+chart2 = (
+    alt.Chart(billet_df)
+    .mark_bar(size=28)
+    .encode(
+        x=alt.X("QuarterLabel:N", title="Quarter", sort=None, axis=alt.Axis(labelAngle=0)),
+        y=alt.Y("Price:Q", title="Billet cost per MT"),
+        tooltip=[
+            alt.Tooltip("QuarterLabel:N", title="Quarter"),
+            alt.Tooltip("Price:Q", title="Price", format=",.0f"),
+        ],
+    )
+    .properties(height=430)
+)
+st.altair_chart(chart2, use_container_width=True)
+
+# --- Summary for billet
+first_b = billet_df.iloc[0]
+last_b = billet_df.iloc[-1]
+b_start = float(first_b["Price"])
+b_end = float(last_b["Price"])
+b_arrow = "↑" if (b_end - b_start) > 0 else ("↓" if (b_end - b_start) < 0 else "→")
+b_hi = billet_df.loc[billet_df["Price"].idxmax()]
+b_lo = billet_df.loc[billet_df["Price"].idxmin()]
+b_avg = float(billet_df["Price"].mean())
+
+billet_summary = f"""
+<div class="summary-box">
+  <div><b>{first_b['QuarterLabel']}</b> to <b>{last_b['QuarterLabel']}</b>: price moved from <b>{_fmt_int(b_start)}</b> to <b>{_fmt_int(b_end)}</b> ({b_arrow} {b_end - b_start:+.0f}).</div>
+  <div>Period high was <b>{_fmt_int(b_hi['Price'])}</b> in <b>{b_hi['QuarterLabel']}</b>; low was <b>{_fmt_int(b_lo['Price'])}</b> in <b>{b_lo['QuarterLabel']}</b> (range {_fmt_int(b_hi['Price'] - b_lo['Price'])}).</div>
+  <div>Across <b>{len(billet_df)}</b> quarters, the average price was <b>{_fmt_int(b_avg)}</b>. These details auto-update with your quarter filters.</div>
+</div>
+"""
+st.markdown(billet_summary, unsafe_allow_html=True)
