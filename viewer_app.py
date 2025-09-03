@@ -128,15 +128,26 @@ def _bar_size(n: int) -> int:
     size = int(approx_width / max(1, n) * 0.65)
     return max(8, min(42, size))
 
+# ➕ tooltip display helper: big numbers => no decimals; small numbers => 2 decimals
+def _fmt_tooltip(v):
+    try:
+        v = float(v)
+        return f"${v:,.2f}" if abs(v) < 10 else f"${v:,.0f}"
+    except Exception:
+        return str(v)
+
+f["PriceTT"] = f["Price"].apply(_fmt_tooltip)
+
 chart = (
     alt.Chart(f)
     .mark_bar(size=_bar_size(len(f)))
     .encode(
-        # ✅ only change earlier: add x-axis title
         x=alt.X("MonthLabel:N", title="Months", sort=None, axis=alt.Axis(labelAngle=0)),
         y=alt.Y("Price:Q", title="Price"),
-        tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
-                 alt.Tooltip("Price:Q", format=",.2f")],
+        tooltip=[
+            alt.Tooltip("MonthLabel:N", title="Month"),
+            alt.Tooltip("PriceTT:N", title="Price"),   # ← shows like: Price $15,325  /  Price $3.05
+        ],
     )
     .properties(height=430)
 )
@@ -184,5 +195,4 @@ summary_html = f"""
   <div>Across <b>{n_months}</b> months, the average price was <b>{_fmt_money(avg_price)}</b>. These details auto-update with your date filters.</div>
 </div>
 """
-
 st.markdown(summary_html, unsafe_allow_html=True)
