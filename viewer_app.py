@@ -20,7 +20,7 @@ st.markdown(
       .sheet-headline{
         margin: 8px 0 12px 0;
         font-weight: 800;
-        font-size: 18px;  /* <-- bigger */
+        font-size: 18px;
         color:#111827;
       }
     </style>
@@ -113,14 +113,22 @@ def _bar_size(n: int) -> int:
     size = int(approx_width / max(1, n) * 0.65)
     return max(8, min(42, size))
 
+# 🔧 Change here: add x-axis title "Months"
 chart = (
     alt.Chart(f)
     .mark_bar(size=_bar_size(len(f)))
     .encode(
-        x=alt.X("MonthLabel:N", title=None, sort=None, axis=alt.Axis(labelAngle=0)),
+        x=alt.X(
+            "MonthLabel:N",
+            title="Months",          # <-- x-axis title added
+            sort=None,
+            axis=alt.Axis(labelAngle=0),
+        ),
         y=alt.Y("Price:Q", title="Price"),
-        tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
-                 alt.Tooltip("Price:Q", format=",.2f")],
+        tooltip=[
+            alt.Tooltip("MonthLabel:N", title="Month"),
+            alt.Tooltip("Price:Q", format=",.2f"),
+        ],
     )
     .properties(height=430)
 )
