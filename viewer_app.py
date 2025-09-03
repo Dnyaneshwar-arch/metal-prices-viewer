@@ -209,20 +209,24 @@ st.markdown(summary_html, unsafe_allow_html=True)
 st.divider()
 st.markdown('<div class="title">Billet Prices</div>', unsafe_allow_html=True)
 
-# ---- helpers for Billet Excel ----
-BILLET_FILE_CANDIDATES = [Path("data") / "Billet cost.xlsx", Path("Billet cost.xlsx")]
+from pathlib import Path
+import re
 
-# Nice labels shown to users:
+# ---- helpers for Billet Excel ----
+BASE_DIR = Path(__file__).parent.resolve()
+
+# Search in data/, data/current/, or repo root
+BILLET_FILE_CANDIDATES = [
+    BASE_DIR / "data" / "Billet cost.xlsx",
+    BASE_DIR / "data" / "current" / "Billet cost.xlsx",  # <- your current location
+    BASE_DIR / "Billet cost.xlsx",
+]
+
+# Nice labels for the dropdown
 BILLET_SERIES_LABELS = [
     "Billet Price (Blast Furnace Route)",
     "Billet Price (Electric Arc Furnace)",
 ]
-
-# Actual sheet names inside the Excel (truncated by Excel’s 31-char limit)
-SHEET_NAME_MAP = {
-    "Billet Price (Blast Furnace Route)": "Billet Price (Blast Furnace Rou",
-    "Billet Price (Electric Arc Furnace)": "Billet Price (Electric Arc Furn",
-}
 
 def _find_billet_file() -> Path | None:
     for p in BILLET_FILE_CANDIDATES:
@@ -230,49 +234,63 @@ def _find_billet_file() -> Path | None:
             return p
     return None
 
+def _resolve_sheet_name(xls: pd.ExcelFile, series_label: str) -> str:
+    """Pick the correct sheet even if Excel truncated to 31 chars."""
+    want_blast = "blast" in series_label.lower()
+    for name in xls.sheet_names:
+        n = name.lower()
+        if want_blast and "blast" in n:
+            return name
+        if not want_blast and ("electric" in n or "arc" in n):
+            return name
+    return xls.sheet_names[0]
+
 def _load_billet_df(series_label: str) -> pd.DataFrame:
     """
-    Returns a tidy df with columns: Quarter(str), Price(float), QuarterOrder(int), QuarterLabel(str)
-    It auto-detects the 'Quarter' column even if it is spelled differently, and the Price col.
+    Returns tidy df: Quarter(str), Price(float), QuarterOrder(int), QuarterLabel(str)
     """
     src = _find_billet_file()
     if not src:
-        st.error("Billet Excel not found. Put **Billet cost.xlsx** in a `data/` folder (preferred) or next to this file.")
+        st.error("Billet Excel not found. Put **Billet cost.xlsx** in `data/` or `data/current/` (or next to this file).")
         st.stop()
 
-    sheet_name = SHEET_NAME_MAP[series_label]
-    raw = pd.read_excel(src, sheet_name=sheet_name)
+    # open with openpyxl engine
+    try:
+        xls = pd.ExcelFile(src)
+    except Exception as e:
+        st.error(f"Could not open {src.name}: {e}. Ensure `openpyxl` is in requirements.txt.")
+        st.stop()
 
-    # Identify columns by fuzzy match
+    sheet_name = _resolve_sheet_name(xls, series_label)
+    raw = xls.parse(sheet_name=sheet_name)
+
+    # Fuzzy column detection
     quarter_col = next((c for c in raw.columns if re.search(r"q(u)?arter", str(c), re.I)), None)
     if quarter_col is None:
-        # handle 'Qurter' / 'Qurter -B'
         quarter_col = next((c for c in raw.columns if re.search(r"qurter", str(c), re.I)), None)
-    price_col = next((c for c in raw.columns if re.search(r"billet.*per.*mt", str(c), re.I)), None)
+    price_col = next((c for c in raw.columns if re.search(r"billet.*(per)?.*mt", str(c), re.I)), None)
 
     if quarter_col is None or price_col is None:
-        st.error("Could not detect columns in billet sheet. Make sure it has a Quarter column and a 'Billet cost per MT' column.")
+        st.error("Could not detect columns. Need a Quarter column and a 'Billet cost per MT' column.")
         st.stop()
 
     df0 = raw[[quarter_col, price_col]].rename(columns={quarter_col: "Quarter", price_col: "Price"})
     df0["Quarter"] = df0["Quarter"].astype(str).str.strip()
 
-    # Build stable order: parse Qx-YYYY or Qx YYYY
+    # Q1-2024 / Q1 2024 ordering
     def _q_order(qs: str) -> int:
         m = re.search(r"Q(\d)\s*[- ]\s*(\d{4})", qs, flags=re.I)
         if not m:
             return 0
-        q = int(m.group(1))
-        y = int(m.group(2))
+        q = int(m.group(1)); y = int(m.group(2))
         return y * 10 + q
 
     df0["QuarterOrder"] = df0["Quarter"].apply(_q_order)
     df0 = df0.sort_values("QuarterOrder")
     df0["QuarterLabel"] = df0["Quarter"].str.replace("-", " ", regex=False)
-
-    # Clean price
     df0["Price"] = pd.to_numeric(df0["Price"], errors="coerce")
     df0 = df0.dropna(subset=["Price"])
+    st.caption(f"Source: {src.name} • sheet: {sheet_name}")
     return df0
 
 def _fmt_int(n: float) -> str:
@@ -281,13 +299,8 @@ def _fmt_int(n: float) -> str:
     except Exception:
         return str(n)
 
-# --- UI: which series?
-series_label = st.selectbox(
-    "Select Billet Series",
-    BILLET_SERIES_LABELS,
-    index=0,
-    key="billet-series",
-)
+# --- UI: series dropdown
+series_label = st.selectbox("Select Billet Series", BILLET_SERIES_LABELS, index=0, key="billet-series")
 
 billet_df_full = _load_billet_df(series_label)
 if billet_df_full.empty:
@@ -297,17 +310,16 @@ if billet_df_full.empty:
 # Defaults for quarter range
 quarters = billet_df_full["QuarterLabel"].tolist()
 q_start_def, q_end_def = quarters[0], quarters[-1]
-
 kq_from = f"billet-from-{series_label}"
-kq_to = f"billet-to-{series_label}"
+kq_to   = f"billet-to-{series_label}"
 st.session_state.setdefault(kq_from, q_start_def)
 st.session_state.setdefault(kq_to, q_end_def)
 
-# --- Filter form (quarter range)
+# --- Filter form
 with st.form(key=f"billet-form-{series_label}", border=False):
     c1, c2, c3, c4 = st.columns([2.6, 2.6, 0.6, 0.6], gap="small")
     c1.selectbox("From Quarter", options=quarters, index=0, key=kq_from)
-    c2.selectbox("To Quarter", options=quarters, index=len(quarters) - 1, key=kq_to)
+    c2.selectbox("To Quarter", options=quarters, index=len(quarters)-1, key=kq_to)
     with c3:
         st.markdown('<div style="height:30px;"></div>', unsafe_allow_html=True)
         btn_go = st.form_submit_button("Search")
@@ -317,20 +329,18 @@ with st.form(key=f"billet-form-{series_label}", border=False):
 
 if btn_clear:
     st.session_state[kq_from] = q_start_def
-    st.session_state[kq_to] = q_end_def
+    st.session_state[kq_to]   = q_end_def
     st.rerun()
 
 q_from = st.session_state[kq_from]
-q_to = st.session_state[kq_to]
-
-# Slice the chosen range
+q_to   = st.session_state[kq_to]
 i_from = quarters.index(q_from)
-i_to = quarters.index(q_to)
+i_to   = quarters.index(q_to)
 if i_from > i_to:
     st.error("From Quarter must be ≤ To Quarter.")
     st.stop()
 
-billet_df = billet_df_full.iloc[i_from : i_to + 1].copy()
+billet_df = billet_df_full.iloc[i_from:i_to+1].copy()
 if billet_df.empty:
     st.info("No rows in this quarter range.")
     st.stop()
@@ -342,20 +352,16 @@ chart2 = (
     .encode(
         x=alt.X("QuarterLabel:N", title="Quarter", sort=None, axis=alt.Axis(labelAngle=0)),
         y=alt.Y("Price:Q", title="Billet cost per MT"),
-        tooltip=[
-            alt.Tooltip("QuarterLabel:N", title="Quarter"),
-            alt.Tooltip("Price:Q", title="Price", format=",.0f"),
-        ],
+        tooltip=[alt.Tooltip("QuarterLabel:N", title="Quarter"),
+                 alt.Tooltip("Price:Q", title="Price", format=",.0f")],
     )
     .properties(height=430)
 )
 st.altair_chart(chart2, use_container_width=True)
 
-# --- Summary for billet
-first_b = billet_df.iloc[0]
-last_b = billet_df.iloc[-1]
-b_start = float(first_b["Price"])
-b_end = float(last_b["Price"])
+# --- Summary
+first_b = billet_df.iloc[0]; last_b = billet_df.iloc[-1]
+b_start = float(first_b["Price"]); b_end = float(last_b["Price"])
 b_arrow = "↑" if (b_end - b_start) > 0 else ("↓" if (b_end - b_start) < 0 else "→")
 b_hi = billet_df.loc[billet_df["Price"].idxmax()]
 b_lo = billet_df.loc[billet_df["Price"].idxmin()]
