@@ -204,25 +204,18 @@ summary_html = f"""
 st.markdown(summary_html, unsafe_allow_html=True)
 
 # ================================
-# NEW: BILLET PRICES DASHBOARD
+# NEW: BILLET PRICES DASHBOARD  ✅ fixed Clear
 # ================================
 st.divider()
 st.markdown('<div class="title">Billet Prices</div>', unsafe_allow_html=True)
 
-from pathlib import Path
-import re
-
 # ---- helpers for Billet Excel ----
 BASE_DIR = Path(__file__).parent.resolve()
-
-# Search in data/, data/current/, or repo root
 BILLET_FILE_CANDIDATES = [
     BASE_DIR / "data" / "Billet cost.xlsx",
-    BASE_DIR / "data" / "current" / "Billet cost.xlsx",  # <- your current location
+    BASE_DIR / "data" / "current" / "Billet cost.xlsx",
     BASE_DIR / "Billet cost.xlsx",
 ]
-
-# Nice labels for the dropdown
 BILLET_SERIES_LABELS = [
     "Billet Price (Blast Furnace Route)",
     "Billet Price (Electric Arc Furnace)",
@@ -235,7 +228,6 @@ def _find_billet_file() -> Path | None:
     return None
 
 def _resolve_sheet_name(xls: pd.ExcelFile, series_label: str) -> str:
-    """Pick the correct sheet even if Excel truncated to 31 chars."""
     want_blast = "blast" in series_label.lower()
     for name in xls.sheet_names:
         n = name.lower()
@@ -246,15 +238,10 @@ def _resolve_sheet_name(xls: pd.ExcelFile, series_label: str) -> str:
     return xls.sheet_names[0]
 
 def _load_billet_df(series_label: str) -> pd.DataFrame:
-    """
-    Returns tidy df: Quarter(str), Price(float), QuarterOrder(int), QuarterLabel(str)
-    """
     src = _find_billet_file()
     if not src:
         st.error("Billet Excel not found. Put **Billet cost.xlsx** in `data/` or `data/current/` (or next to this file).")
         st.stop()
-
-    # open with openpyxl engine
     try:
         xls = pd.ExcelFile(src)
     except Exception as e:
@@ -264,12 +251,8 @@ def _load_billet_df(series_label: str) -> pd.DataFrame:
     sheet_name = _resolve_sheet_name(xls, series_label)
     raw = xls.parse(sheet_name=sheet_name)
 
-    # Fuzzy column detection
-    quarter_col = next((c for c in raw.columns if re.search(r"q(u)?arter", str(c), re.I)), None)
-    if quarter_col is None:
-        quarter_col = next((c for c in raw.columns if re.search(r"qurter", str(c), re.I)), None)
-    price_col = next((c for c in raw.columns if re.search(r"billet.*(per)?.*mt", str(c), re.I)), None)
-
+    quarter_col = next((c for c in raw.columns if re.search(r"q(u)?arter|qurter", str(c), re.I)), None)
+    price_col   = next((c for c in raw.columns if re.search(r"billet.*(per)?.*mt", str(c), re.I)), None)
     if quarter_col is None or price_col is None:
         st.error("Could not detect columns. Need a Quarter column and a 'Billet cost per MT' column.")
         st.stop()
@@ -277,11 +260,9 @@ def _load_billet_df(series_label: str) -> pd.DataFrame:
     df0 = raw[[quarter_col, price_col]].rename(columns={quarter_col: "Quarter", price_col: "Price"})
     df0["Quarter"] = df0["Quarter"].astype(str).str.strip()
 
-    # Q1-2024 / Q1 2024 ordering
     def _q_order(qs: str) -> int:
         m = re.search(r"Q(\d)\s*[- ]\s*(\d{4})", qs, flags=re.I)
-        if not m:
-            return 0
+        if not m: return 0
         q = int(m.group(1)); y = int(m.group(2))
         return y * 10 + q
 
@@ -299,27 +280,43 @@ def _fmt_int(n: float) -> str:
     except Exception:
         return str(n)
 
-# --- UI: series dropdown
+# --- Series dropdown
 series_label = st.selectbox("Select Billet Series", BILLET_SERIES_LABELS, index=0, key="billet-series")
-
 billet_df_full = _load_billet_df(series_label)
 if billet_df_full.empty:
-    st.info("No billet rows.")
-    st.stop()
+    st.info("No billet rows."); st.stop()
 
-# Defaults for quarter range
-quarters = billet_df_full["QuarterLabel"].tolist()
-q_start_def, q_end_def = quarters[0], quarters[-1]
-kq_from = f"billet-from-{series_label}"
-kq_to   = f"billet-to-{series_label}"
+quarters     = billet_df_full["QuarterLabel"].tolist()
+q_start_def  = quarters[0]
+q_end_def    = quarters[-1]
+
+# Persistent "applied" keys (NOT widget keys)
+kq_from = f"applied-billet-from-{series_label}"
+kq_to   = f"applied-billet-to-{series_label}"
 st.session_state.setdefault(kq_from, q_start_def)
-st.session_state.setdefault(kq_to, q_end_def)
+st.session_state.setdefault(kq_to,   q_end_def)
+
+# Version to force fresh widget keys after Clear
+kq_ver = f"billet-ver-{series_label}"
+st.session_state.setdefault(kq_ver, 0)
+ver2 = st.session_state[kq_ver]
+
+# Widget keys are DIFFERENT from applied keys
+wq_from = f"widget-billet-from-{series_label}-{ver2}"
+wq_to   = f"widget-billet-to-{series_label}-{ver2}"
+
+# Compute initial indices from applied values (clamp if series changed)
+def _safe_idx(val: str, opts: list[str], fallback_idx: int) -> int:
+    return opts.index(val) if val in opts else fallback_idx
+
+idx_from = _safe_idx(st.session_state[kq_from], quarters, 0)
+idx_to   = _safe_idx(st.session_state[kq_to],   quarters, len(quarters)-1)
 
 # --- Filter form
-with st.form(key=f"billet-form-{series_label}", border=False):
+with st.form(key=f"billet-form-{series_label}-{ver2}", border=False):
     c1, c2, c3, c4 = st.columns([2.6, 2.6, 0.6, 0.6], gap="small")
-    c1.selectbox("From Quarter", options=quarters, index=0, key=kq_from)
-    c2.selectbox("To Quarter", options=quarters, index=len(quarters)-1, key=kq_to)
+    c1.selectbox("From Quarter", options=quarters, index=idx_from, key=wq_from)
+    c2.selectbox("To Quarter",   options=quarters, index=idx_to,   key=wq_to)
     with c3:
         st.markdown('<div style="height:30px;"></div>', unsafe_allow_html=True)
         btn_go = st.form_submit_button("Search")
@@ -327,23 +324,29 @@ with st.form(key=f"billet-form-{series_label}", border=False):
         st.markdown('<div style="height:30px;"></div>', unsafe_allow_html=True)
         btn_clear = st.form_submit_button("Clear")
 
+# Handle buttons
 if btn_clear:
+    # reset applied values and bump version so widgets get fresh keys/defaults
     st.session_state[kq_from] = q_start_def
     st.session_state[kq_to]   = q_end_def
+    st.session_state[kq_ver]  = ver2 + 1
     st.rerun()
 
+if btn_go:
+    sel_from = st.session_state[wq_from]
+    sel_to   = st.session_state[wq_to]
+    if quarters.index(sel_from) > quarters.index(sel_to):
+        st.error("From Quarter must be ≤ To Quarter."); st.stop()
+    st.session_state[kq_from] = sel_from
+    st.session_state[kq_to]   = sel_to
+
+# Apply current range
 q_from = st.session_state[kq_from]
 q_to   = st.session_state[kq_to]
-i_from = quarters.index(q_from)
-i_to   = quarters.index(q_to)
-if i_from > i_to:
-    st.error("From Quarter must be ≤ To Quarter.")
-    st.stop()
-
+i_from = quarters.index(q_from); i_to = quarters.index(q_to)
 billet_df = billet_df_full.iloc[i_from:i_to+1].copy()
 if billet_df.empty:
-    st.info("No rows in this quarter range.")
-    st.stop()
+    st.info("No rows in this quarter range."); st.stop()
 
 # --- Chart
 chart2 = (
@@ -367,11 +370,10 @@ b_hi = billet_df.loc[billet_df["Price"].idxmax()]
 b_lo = billet_df.loc[billet_df["Price"].idxmin()]
 b_avg = float(billet_df["Price"].mean())
 
-billet_summary = f"""
+st.markdown(f"""
 <div class="summary-box">
   <div><b>{first_b['QuarterLabel']}</b> to <b>{last_b['QuarterLabel']}</b>: price moved from <b>{_fmt_int(b_start)}</b> to <b>{_fmt_int(b_end)}</b> ({b_arrow} {b_end - b_start:+.0f}).</div>
   <div>Period high was <b>{_fmt_int(b_hi['Price'])}</b> in <b>{b_hi['QuarterLabel']}</b>; low was <b>{_fmt_int(b_lo['Price'])}</b> in <b>{b_lo['QuarterLabel']}</b> (range {_fmt_int(b_hi['Price'] - b_lo['Price'])}).</div>
   <div>Across <b>{len(billet_df)}</b> quarters, the average price was <b>{_fmt_int(b_avg)}</b>. These details auto-update with your quarter filters.</div>
 </div>
-"""
-st.markdown(billet_summary, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
