@@ -49,16 +49,15 @@ st.markdown(
 st.markdown('<div class="title">Metal Prices Dashboards</div>', unsafe_allow_html=True)
 
 # ================================
-# EXISTING: SCRAP / COMMODITY DASHBOARD (unchanged)
+# EXISTING: SCRAP / COMMODITY DASHBOARD (unchanged structure)
 # ================================
 DEFAULT_START = pd.to_datetime("2025-04-01").date()
 DEFAULT_END = pd.Timestamp.today().date()
 
 config = load_config()
 sheets: List[Dict] = config.get("sheets", []) if isinstance(config, dict) else config
-if not sheets:
-    st.info("No published data yet.")
-    st.stop()
+(if_not := (not sheets)) and st.info("No published data yet.") or None
+if if_not: st.stop()
 
 labels = [s.get("label") or s.get("sheet") or s.get("slug") for s in sheets]
 slugs = [s.get("slug") for s in sheets]
@@ -127,7 +126,7 @@ if f.empty:
     st.info("No rows in this range.")
     st.stop()
 
-# ------- Plot -------
+# ------- Plot (BAR + LINE OVERLAY) -------
 f = f.sort_values("Month")
 f["MonthLabel"] = pd.to_datetime(f["Month"]).dt.strftime("%b %y").str.upper()
 
@@ -136,7 +135,6 @@ def _bar_size(n: int) -> int:
     size = int(approx_width / max(1, n) * 0.65)
     return max(8, min(42, size))
 
-# ➕ tooltip display helper
 def _fmt_tooltip(v):
     try:
         v = float(v)
@@ -146,19 +144,29 @@ def _fmt_tooltip(v):
 
 f["PriceTT"] = f["Price"].apply(_fmt_tooltip)
 
-chart = (
+bar = (
     alt.Chart(f)
     .mark_bar(size=_bar_size(len(f)))
     .encode(
         x=alt.X("MonthLabel:N", title="Months", sort=None, axis=alt.Axis(labelAngle=0)),
         y=alt.Y("Price:Q", title="Price"),
-        tooltip=[
-            alt.Tooltip("MonthLabel:N", title="Month"),
-            alt.Tooltip("PriceTT:N", title="Price"),
-        ],
+        tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
+                 alt.Tooltip("PriceTT:N", title="Price")],
     )
-    .properties(height=430)
 )
+
+line = (
+    alt.Chart(f)
+    .mark_line(point=True)
+    .encode(
+        x=alt.X("MonthLabel:N", sort=None),
+        y=alt.Y("Price:Q"),
+        tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
+                 alt.Tooltip("PriceTT:N", title="Price")],
+    )
+)
+
+chart = (bar + line).properties(height=430)
 st.altair_chart(chart, use_container_width=True)
 
 # ------- Auto summary under the chart -------
@@ -204,7 +212,7 @@ summary_html = f"""
 st.markdown(summary_html, unsafe_allow_html=True)
 
 # ================================
-# NEW: BILLET PRICES DASHBOARD  ✅ fixed Clear
+# NEW: BILLET PRICES DASHBOARD  (BAR + LINE OVERLAY)
 # ================================
 st.divider()
 st.markdown('<div class="title">Billet Prices</div>', unsafe_allow_html=True)
@@ -326,7 +334,6 @@ with st.form(key=f"billet-form-{series_label}-{ver2}", border=False):
 
 # Handle buttons
 if btn_clear:
-    # reset applied values and bump version so widgets get fresh keys/defaults
     st.session_state[kq_from] = q_start_def
     st.session_state[kq_to]   = q_end_def
     st.session_state[kq_ver]  = ver2 + 1
@@ -348,8 +355,8 @@ billet_df = billet_df_full.iloc[i_from:i_to+1].copy()
 if billet_df.empty:
     st.info("No rows in this quarter range."); st.stop()
 
-# --- Chart
-chart2 = (
+# --- Chart (BAR + LINE OVERLAY)
+bars2 = (
     alt.Chart(billet_df)
     .mark_bar(size=28)
     .encode(
@@ -358,8 +365,20 @@ chart2 = (
         tooltip=[alt.Tooltip("QuarterLabel:N", title="Quarter"),
                  alt.Tooltip("Price:Q", title="Price", format=",.0f")],
     )
-    .properties(height=430)
 )
+
+line2 = (
+    alt.Chart(billet_df)
+    .mark_line(point=True)
+    .encode(
+        x=alt.X("QuarterLabel:N", sort=None),
+        y=alt.Y("Price:Q"),
+        tooltip=[alt.Tooltip("QuarterLabel:N", title="Quarter"),
+                 alt.Tooltip("Price:Q", title="Price", format=",.0f")],
+    )
+)
+
+chart2 = (bars2 + line2).properties(height=430)
 st.altair_chart(chart2, use_container_width=True)
 
 # --- Summary
