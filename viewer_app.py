@@ -212,8 +212,14 @@ summary_html = f"""
 st.markdown(summary_html, unsafe_allow_html=True)
 
 # ================================
-# NEW: BILLET PRICES DASHBOARD  (BAR + LINE OVERLAY)
+# NEW: BILLET PRICES DASHBOARD — bar+line overlay with ₹ tooltip
 # ================================
+from pathlib import Path
+import re
+import pandas as pd
+import altair as alt
+import streamlit as st
+
 st.divider()
 st.markdown('<div class="title">Billet Prices</div>', unsafe_allow_html=True)
 
@@ -282,12 +288,6 @@ def _load_billet_df(series_label: str) -> pd.DataFrame:
     st.caption(f"Source: {src.name} • sheet: {sheet_name}")
     return df0
 
-def _fmt_int(n: float) -> str:
-    try:
-        return f"{float(n):,.0f}"
-    except Exception:
-        return str(n)
-
 # --- Series dropdown
 series_label = st.selectbox("Select Billet Series", BILLET_SERIES_LABELS, index=0, key="billet-series")
 billet_df_full = _load_billet_df(series_label)
@@ -355,7 +355,16 @@ billet_df = billet_df_full.iloc[i_from:i_to+1].copy()
 if billet_df.empty:
     st.info("No rows in this quarter range."); st.stop()
 
-# --- Chart (BAR + LINE OVERLAY)
+# --- Tooltip string with rupee sign for the Billet chart
+def _fmt_inr(n: float) -> str:
+    try:
+        return f"₹{float(n):,.0f}"  # e.g., ₹42,495
+    except Exception:
+        return f"₹{n}"
+
+billet_df["PriceTT"] = billet_df["Price"].apply(_fmt_inr)
+
+# --- Chart (BAR + LINE OVERLAY with ₹ tooltip)
 bars2 = (
     alt.Chart(billet_df)
     .mark_bar(size=28)
@@ -363,7 +372,7 @@ bars2 = (
         x=alt.X("QuarterLabel:N", title="Quarter", sort=None, axis=alt.Axis(labelAngle=0)),
         y=alt.Y("Price:Q", title="Billet cost per MT"),
         tooltip=[alt.Tooltip("QuarterLabel:N", title="Quarter"),
-                 alt.Tooltip("Price:Q", title="Price", format=",.0f")],
+                 alt.Tooltip("PriceTT:N",      title="Price")],
     )
 )
 
@@ -374,14 +383,20 @@ line2 = (
         x=alt.X("QuarterLabel:N", sort=None),
         y=alt.Y("Price:Q"),
         tooltip=[alt.Tooltip("QuarterLabel:N", title="Quarter"),
-                 alt.Tooltip("Price:Q", title="Price", format=",.0f")],
+                 alt.Tooltip("PriceTT:N",      title="Price")],
     )
 )
 
 chart2 = (bars2 + line2).properties(height=430)
 st.altair_chart(chart2, use_container_width=True)
 
-# --- Summary
+# --- Summary (kept as numbers; tooltips already show ₹)
+def _fmt_int(n: float) -> str:
+    try:
+        return f"{float(n):,.0f}"
+    except Exception:
+        return str(n)
+
 first_b = billet_df.iloc[0]; last_b = billet_df.iloc[-1]
 b_start = float(first_b["Price"]); b_end = float(last_b["Price"])
 b_arrow = "↑" if (b_end - b_start) > 0 else ("↓" if (b_end - b_start) < 0 else "→")
