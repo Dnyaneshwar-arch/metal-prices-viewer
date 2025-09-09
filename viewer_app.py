@@ -9,6 +9,13 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
+# NEW: lightweight forecasting
+try:
+    from statsmodels.tsa.holtwinters import ExponentialSmoothing
+    _HAS_STATSMODELS = True
+except Exception:
+    _HAS_STATSMODELS = False
+
 from data_utils import load_config, load_sheet
 
 # ---------- Page & CSS ----------
@@ -49,7 +56,7 @@ st.markdown(
 st.markdown('<div class="title">Metal Prices Dashboards</div>', unsafe_allow_html=True)
 
 # ================================
-# EXISTING: SCRAP / COMMODITY DASHBOARD (unchanged structure)
+# EXISTING: SCRAP / COMMODITY DASHBOARD
 # ================================
 DEFAULT_START = pd.to_datetime("2025-04-01").date()
 DEFAULT_END = pd.Timestamp.today().date()
@@ -166,10 +173,76 @@ line = (
     )
 )
 
-chart = (bar + line).properties(height=430)
+# === Forecast (Scrap) ===
+def _forecast_series(y: pd.Series, periods: int, seasonal_periods: int) -> pd.Series:
+    """Forecast helper with Holt-Winters; safe fallback."""
+    if len(y) < 3:
+        return pd.Series([y.iloc[-1]] * periods, index=range(periods))
+    if _HAS_STATSMODELS:
+        try:
+            use_season = seasonal_periods > 0 and len(y) >= (seasonal_periods * 2)
+            model = ExponentialSmoothing(
+                y.astype(float),
+                trend="add",
+                seasonal="add" if use_season else None,
+                seasonal_periods=seasonal_periods if use_season else None,
+                initialization_method="estimated",
+            )
+            fit = model.fit(optimized=True)
+            fc = fit.forecast(periods)
+            return pd.Series(fc)
+        except Exception:
+            pass
+    # fallback
+    return pd.Series([y.iloc[-1]] * periods)
+
+# Build future month labels
+last_month = pd.to_datetime(f["Month"].max())
+future_months = pd.date_range(last_month + pd.offsets.MonthBegin(1), periods=3, freq="MS")
+scrap_fc = _forecast_series(f["Price"].reset_index(drop=True), periods=3, seasonal_periods=12)
+scrap_fc_df = pd.DataFrame({
+    "Month": future_months,
+    "MonthLabel": future_months.strftime("%b %y").str.upper(),
+    "Price": scrap_fc.values,
+    "PriceTT": scrap_fc.apply(_fmt_tooltip).values,
+    "is_forecast": True,
+})
+
+f_act = f.copy()
+f_act["is_forecast"] = False
+plot_scrap = pd.concat([f_act, scrap_fc_df], ignore_index=True)
+
+# Chart: keep bars for actual only; line continues with dashed forecast
+bars_actual = (
+    alt.Chart(plot_scrap[plot_scrap["is_forecast"] == False])
+    .mark_bar(size=_bar_size(len(f)))
+    .encode(
+        x=alt.X("MonthLabel:N", title="Months", sort=None, axis=alt.Axis(labelAngle=0)),
+        y=alt.Y("Price:Q", title="Price"),
+        tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
+                 alt.Tooltip("PriceTT:N", title="Price")],
+    )
+)
+
+line_all = (
+    alt.Chart(plot_scrap)
+    .mark_line(point=True)
+    .encode(
+        x=alt.X("MonthLabel:N", sort=None),
+        y=alt.Y("Price:Q"),
+        detail="is_forecast:N",
+        strokeDash=alt.condition(
+            alt.datum.is_forecast, alt.value([4,3]), alt.value([1,0])
+        ),
+        tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
+                 alt.Tooltip("PriceTT:N", title="Price")],
+    )
+)
+
+chart = (bars_actual + line_all).properties(height=430)
 st.altair_chart(chart, use_container_width=True)
 
-# ------- Auto summary under the chart -------
+# ------- Summary under the chart (Actuals) -------
 def _fmt_money(x: float) -> str:
     try:
         return f"${x:,.2f}"
@@ -211,15 +284,21 @@ summary_html = f"""
 """
 st.markdown(summary_html, unsafe_allow_html=True)
 
-# ================================
-# NEW: BILLET PRICES DASHBOARD — bar+line overlay with ₹ tooltip
-# ================================
-from pathlib import Path
-import re
-import pandas as pd
-import altair as alt
-import streamlit as st
+# ------- NEW: Forecast summary for Scrap -------
+scrap_fc_pairs = [f"{d.strftime('%b %Y')}: {_fmt_money(v)}" for d, v in zip(future_months, scrap_fc)]
+st.markdown(
+    f"""
+<div class="summary-box">
+  <div><b>Forecast (next 3 months)</b> — {', '.join(scrap_fc_pairs)}.</div>
+  <div>Method: Holt–Winters (additive trend{', seasonal (12)' if _HAS_STATSMODELS and len(f)>=24 else ''}); falls back to last value if library not available.</div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
 
+# ================================
+# BILLET PRICES DASHBOARD — bar+line overlay with ₹ tooltip + forecast
+# ================================
 st.divider()
 st.markdown('<div class="title">Billet Prices</div>', unsafe_allow_html=True)
 
@@ -298,7 +377,7 @@ quarters     = billet_df_full["QuarterLabel"].tolist()
 q_start_def  = quarters[0]
 q_end_def    = quarters[-1]
 
-# Persistent "applied" keys (NOT widget keys)
+# Persistent "applied" keys
 kq_from = f"applied-billet-from-{series_label}"
 kq_to   = f"applied-billet-to-{series_label}"
 st.session_state.setdefault(kq_from, q_start_def)
@@ -309,18 +388,16 @@ kq_ver = f"billet-ver-{series_label}"
 st.session_state.setdefault(kq_ver, 0)
 ver2 = st.session_state[kq_ver]
 
-# Widget keys are DIFFERENT from applied keys
+# Widget keys
 wq_from = f"widget-billet-from-{series_label}-{ver2}"
 wq_to   = f"widget-billet-to-{series_label}-{ver2}"
 
-# Compute initial indices from applied values (clamp if series changed)
 def _safe_idx(val: str, opts: list[str], fallback_idx: int) -> int:
     return opts.index(val) if val in opts else fallback_idx
 
 idx_from = _safe_idx(st.session_state[kq_from], quarters, 0)
 idx_to   = _safe_idx(st.session_state[kq_to],   quarters, len(quarters)-1)
 
-# --- Filter form
 with st.form(key=f"billet-form-{series_label}-{ver2}", border=False):
     c1, c2, c3, c4 = st.columns([2.6, 2.6, 0.6, 0.6], gap="small")
     c1.selectbox("From Quarter", options=quarters, index=idx_from, key=wq_from)
@@ -332,7 +409,6 @@ with st.form(key=f"billet-form-{series_label}-{ver2}", border=False):
         st.markdown('<div style="height:30px;"></div>', unsafe_allow_html=True)
         btn_clear = st.form_submit_button("Clear")
 
-# Handle buttons
 if btn_clear:
     st.session_state[kq_from] = q_start_def
     st.session_state[kq_to]   = q_end_def
@@ -347,7 +423,6 @@ if btn_go:
     st.session_state[kq_from] = sel_from
     st.session_state[kq_to]   = sel_to
 
-# Apply current range
 q_from = st.session_state[kq_from]
 q_to   = st.session_state[kq_to]
 i_from = quarters.index(q_from); i_to = quarters.index(q_to)
@@ -355,18 +430,47 @@ billet_df = billet_df_full.iloc[i_from:i_to+1].copy()
 if billet_df.empty:
     st.info("No rows in this quarter range."); st.stop()
 
-# --- Tooltip string with rupee sign for the Billet chart
+# --- Tooltip with ₹
 def _fmt_inr(n: float) -> str:
     try:
-        return f"₹{float(n):,.0f}"  # e.g., ₹42,495
+        return f"₹{float(n):,.0f}"
     except Exception:
         return f"₹{n}"
 
 billet_df["PriceTT"] = billet_df["Price"].apply(_fmt_inr)
 
-# --- Chart (BAR + LINE OVERLAY with ₹ tooltip)
+# === Forecast (Billet) ===
+def _next_quarter_labels(last_label: str, k: int) -> list[str]:
+    # last_label like "Q2 2025"
+    m = re.search(r"Q(\d)\s+(\d{4})", last_label, flags=re.I)
+    if not m:  # fallback
+        return [f"Q{i+1} +" for i in range(k)]
+    q = int(m.group(1)); y = int(m.group(2))
+    out = []
+    for _ in range(k):
+        q += 1
+        if q == 5:
+            q = 1; y += 1
+        out.append(f"Q{q} {y}")
+    return out
+
+billet_fc = _forecast_series(billet_df["Price"].reset_index(drop=True), periods=2, seasonal_periods=4)
+future_quarters = _next_quarter_labels(billet_df["QuarterLabel"].iloc[-1], 2)
+
+billet_fc_df = pd.DataFrame({
+    "QuarterLabel": future_quarters,
+    "Price": billet_fc.values,
+    "PriceTT": billet_fc.apply(_fmt_inr).values,
+    "is_forecast": True,
+})
+
+b_act = billet_df.copy()
+b_act["is_forecast"] = False
+billet_plot = pd.concat([b_act, billet_fc_df], ignore_index=True)
+
+# --- Chart (bars actual, dashed line for forecast)
 bars2 = (
-    alt.Chart(billet_df)
+    alt.Chart(billet_plot[billet_plot["is_forecast"] == False])
     .mark_bar(size=28)
     .encode(
         x=alt.X("QuarterLabel:N", title="Quarter", sort=None, axis=alt.Axis(labelAngle=0)),
@@ -377,11 +481,15 @@ bars2 = (
 )
 
 line2 = (
-    alt.Chart(billet_df)
+    alt.Chart(billet_plot)
     .mark_line(point=True)
     .encode(
         x=alt.X("QuarterLabel:N", sort=None),
         y=alt.Y("Price:Q"),
+        detail="is_forecast:N",
+        strokeDash=alt.condition(
+            alt.datum.is_forecast, alt.value([4,3]), alt.value([1,0])
+        ),
         tooltip=[alt.Tooltip("QuarterLabel:N", title="Quarter"),
                  alt.Tooltip("PriceTT:N",      title="Price")],
     )
@@ -390,7 +498,7 @@ line2 = (
 chart2 = (bars2 + line2).properties(height=430)
 st.altair_chart(chart2, use_container_width=True)
 
-# --- Summary (kept as numbers; tooltips already show ₹)
+# --- Summary (actuals)
 def _fmt_int(n: float) -> str:
     try:
         return f"{float(n):,.0f}"
@@ -411,3 +519,15 @@ st.markdown(f"""
   <div>Across <b>{len(billet_df)}</b> quarters, the average price was <b>{_fmt_int(b_avg)}</b>. These details auto-update with your quarter filters.</div>
 </div>
 """, unsafe_allow_html=True)
+
+# --- NEW: Forecast summary (Billet)
+billet_fc_pairs = [f"{lbl}: {_fmt_inr(val)}" for lbl, val in zip(future_quarters, billet_fc)]
+st.markdown(
+    f"""
+<div class="summary-box">
+  <div><b>Forecast (next 2 quarters)</b> — {', '.join(billet_fc_pairs)}.</div>
+  <div>Method: Holt–Winters (additive trend{', seasonal (4)' if _HAS_STATSMODELS and len(billet_df)>=8 else ''}); falls back to last value if library not available.</div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
