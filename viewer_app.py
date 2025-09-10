@@ -17,6 +17,36 @@ except Exception:
     _HAS_STATSMODELS = False
 
 from data_utils import load_config, load_sheet
+# ---------- Fade animation helpers ----------
+def _open_fade_wrapper():
+    """Inject a per-render CSS animation and open a wrapper <div>."""
+    seed = st.session_state.get("anim_seed", 0)
+    # remember which seed this render used so we can close it
+    st.session_state["__fade_seed"] = seed
+    anim = f"fadeIn_{seed}"
+    cls = f"fadewrap_{seed}"
+    st.markdown(
+        f"""
+        <style id="fade-style-{seed}">
+          @keyframes {anim} {{
+            0%   {{ opacity: 0; transform: translateY(10px); }}
+            100% {{ opacity: 1; transform: translateY(0); }}
+          }}
+          .{cls} {{
+            animation: {anim} 480ms cubic-bezier(.2,.6,.2,1) both;
+            will-change: opacity, transform;
+          }}
+        </style>
+        <div class="{cls}">
+        """,
+        unsafe_allow_html=True,
+    )
+
+def _close_fade_wrapper():
+    """Close the wrapper <div> inserted by _open_fade_wrapper()."""
+    seed = st.session_state.get("__fade_seed")
+    st.markdown(f"</div><!-- fade-{seed} -->", unsafe_allow_html=True)
+
 
 
 # ---------- Page & CSS ----------
