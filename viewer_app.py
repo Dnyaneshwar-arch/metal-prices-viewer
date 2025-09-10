@@ -91,6 +91,16 @@ def _bar_size(n: int) -> int:
     size = int(approx_width / max(1, n) * 0.65)
     return max(8, min(42, size))
 
+def _unique(seq):
+    """Keep order but drop duplicates for stable Vega-Lite domains."""
+    seen = set()
+    out = []
+    for x in seq:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
 # ---------------- Page 1: Metal Prices (Commodity) ----------------
 def render_metal_prices_page():
     st.markdown('<div class="title">Metal Prices Dashboards</div>', unsafe_allow_html=True)
@@ -132,8 +142,9 @@ def render_metal_prices_page():
 
     with st.form(key=f"filters-{slug}-{ver}", border=False):
         c1, c2, c3, c4 = st.columns([2.6, 2.6, 0.6, 0.6], gap="small")
-        c1.date_input("From (dd-mm-yyyy)", def_start, key=w_from)
-        c2.date_input("To (dd-mm-yyyy)", def_end, key=w_to)
+        # 👇 Force DD/MM/YYYY display
+        c1.date_input("From (DD/MM/YYYY)", def_start, key=w_from, format="DD/MM/YYYY")
+        c2.date_input("To (DD/MM/YYYY)", def_end, key=w_to, format="DD/MM/YYYY")
         with c3:
             st.markdown('<div style="height:30px;"></div>', unsafe_allow_html=True)
             search = st.form_submit_button("Search")
@@ -192,10 +203,8 @@ def render_metal_prices_page():
         "is_forecast": True,
     })
 
-    # Shared X domain (actual + forecast)
-    domain_order = f["MonthLabel"].tolist() + [
-        m for m in scrap_fc_df["MonthLabel"].tolist() if m not in set(f["MonthLabel"])
-    ]
+    # Shared X domain (actual + forecast), DEDUPLICATED to avoid render glitches
+    domain_order = _unique(f["MonthLabel"].tolist() + scrap_fc_df["MonthLabel"].tolist())
 
     # Build a single table then split by flag — ensures same rows for bars & actual line
     f_act = f.copy()
@@ -248,7 +257,9 @@ def render_metal_prices_page():
     )
 
     scrap_chart_key = f"scrap-{slug}-{start.isoformat()}-{end.isoformat()}-{ver}"
-    chart = _tidy((bars_actual + line_actual + line_forecast).properties(height=430)).resolve_scale(x="shared", y="shared")
+    # 👇 explicit width helps Vega-Lite avoid “first-hover draw”
+    chart = _tidy((bars_actual + line_actual + line_forecast).properties(height=430, width=1200))\
+        .resolve_scale(x="shared", y="shared")
     st.altair_chart(chart, use_container_width=True, key=scrap_chart_key)
 
     # ------- Summary (actuals) -------
@@ -356,7 +367,7 @@ def render_billet_prices_page():
             st.error("Could not detect columns. Need a Quarter column and a 'Billet cost per MT' column.")
             st.stop()
 
-        df0 = raw[[quarter_col, price_col]].rename(columns={quarter_col: "Quarter", price_col: "Price"})
+        df0 = raw[[quarter_col, price_col]].rename(columns={quarter_col: "Quarter", price_col: "Price"])
         df0["Quarter"] = df0["Quarter"].astype(str).str.strip()
 
         def _q_order(qs: str) -> int:
@@ -471,10 +482,8 @@ def render_billet_prices_page():
     actual_only = plot_all[plot_all["is_forecast"] == False]
     forecast_only = plot_all[plot_all["is_forecast"] == True]
 
-    # Shared X-domain (actual + forecast)
-    domain_order_q = billet_df["QuarterLabel"].tolist() + [
-        q for q in future_quarters if q not in set(billet_df["QuarterLabel"])
-    ]
+    # Shared X-domain (actual + forecast), DEDUPLICATED
+    domain_order_q = _unique(billet_df["QuarterLabel"].tolist() + future_quarters)
 
     # --- Layers
     bars2 = (
@@ -519,7 +528,8 @@ def render_billet_prices_page():
     )
 
     billet_chart_key = f"billet-{series_label}-{q_from}-{q_to}-{ver2}"
-    chart2 = _tidy((bars2 + line2_actual + line2_forecast).properties(height=430)).resolve_scale(x="shared", y="shared")
+    chart2 = _tidy((bars2 + line2_actual + line2_forecast).properties(height=430, width=1200))\
+        .resolve_scale(x="shared", y="shared")
     st.altair_chart(chart2, use_container_width=True, key=billet_chart_key)
 
     # --- Summary
