@@ -1,19 +1,10 @@
-# --- Core app ---
 streamlit>=1.33.0
 pandas>=2.0
 numpy>=1.23
-
-# --- Charts ---
 altair>=5.2
-
-# --- Forecasting (Holt–Winters) ---
 statsmodels>=0.14.1
 scipy>=1.10
 patsy>=0.5.3
-
-# --- Excel I/O ---
 openpyxl>=3.1.2
-
-# --- Date/time helpers ---
 python-dateutil>=2.8.2
 tzdata>=2024.1
