@@ -209,15 +209,8 @@ def render_metal_prices_page():
     if f.empty:
         st.info("No rows in this range."); st.stop()
 
-    # ------- Plot data (dedupe to one value per month to keep bars & line aligned) -------
+    # ------- Plot data -------
     f = f.sort_values("Month")
-    # If your sheet sometimes has multiple rows for a month, keep the *last* value.
-    # (Change "last" to "mean" if you prefer an average.)
-    f = (
-        f.groupby("Month", as_index=False)
-         .agg(Price=("Price", "last"))
-    )
-
     f["MonthLabel"] = pd.to_datetime(f["Month"]).dt.strftime("%b %y").str.upper()
 
     def _fmt_tooltip(v):
@@ -254,7 +247,7 @@ def render_metal_prices_page():
     actual_only = plot_all[plot_all["is_forecast"] == False]
     forecast_only = plot_all[plot_all["is_forecast"] == True]
 
-    # ------- Layers (add detail to prevent unintended aggregation) -------
+    # ------- Layers -------
     bars_actual = (
         alt.Chart(actual_only)
         .mark_bar(size=_bar_size(len(actual_only)))
@@ -267,7 +260,6 @@ def render_metal_prices_page():
                 scale=alt.Scale(domain=domain_order, paddingOuter=0.35, paddingInner=0.45),
             ),
             y=alt.Y("Price:Q", title="Price", scale=alt.Scale(zero=False, nice=True)),
-            detail="Month:T",
             tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
                      alt.Tooltip("PriceTT:N", title="Price")],
         )
@@ -280,7 +272,6 @@ def render_metal_prices_page():
             x=alt.X("MonthLabel:N", sort=domain_order,
                     scale=alt.Scale(domain=domain_order, paddingOuter=0.35, paddingInner=0.45)),
             y=alt.Y("Price:Q", scale=alt.Scale(zero=False, nice=True)),
-            detail="Month:T",
             tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
                      alt.Tooltip("PriceTT:N", title="Price")],
         )
@@ -293,7 +284,6 @@ def render_metal_prices_page():
             x=alt.X("MonthLabel:N", sort=domain_order,
                     scale=alt.Scale(domain=domain_order, paddingOuter=0.35, paddingInner=0.45)),
             y=alt.Y("Price:Q", scale=alt.Scale(zero=False, nice=True)),
-            detail="Month:T",
             tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
                      alt.Tooltip("PriceTT:N", title="Price")],
         )
@@ -408,7 +398,9 @@ def render_billet_prices_page():
             st.error("Could not detect columns. Need a Quarter column and a 'Billet cost per MT' column.")
             st.stop()
 
-        df0 = raw[[quarter_col, price_col]].rename(columns={quarter_col: "Quarter", price_col: "Price"])
+        # ---- FIXED LINE (correct bracket) ----
+        df0 = raw[[quarter_col, price_col]].rename(columns={quarter_col: "Quarter", price_col: "Price"})
+
         df0["Quarter"] = df0["Quarter"].astype(str).str.strip()
 
         def _q_order(qs: str) -> int:
