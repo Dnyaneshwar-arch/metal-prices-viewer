@@ -49,7 +49,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Small helper to apply consistent anti-clipping config on Altair charts
 def _tidy(chart: alt.Chart) -> alt.Chart:
     return (
         chart
@@ -145,7 +144,7 @@ f = df.loc[mask].copy()
 if f.empty:
     st.info("No rows in this range."); st.stop()
 
-# ------- Plot data -------
+# ------- Plot data (original look preserved) -------
 f = f.sort_values("Month")
 f["MonthLabel"] = pd.to_datetime(f["Month"]).dt.strftime("%b %y").str.upper()
 
@@ -196,20 +195,16 @@ scrap_fc_df = pd.DataFrame({
     "is_forecast": True,
 })
 
-# ---------- IMPORTANT: de-duplicate to one row per month for bars ----------
-# If the source has accidental duplicates, bars would stack and look too tall.
-f_act = f.copy()
-f_act["is_forecast"] = False
-bars_df = (
-    f_act.groupby("MonthLabel", as_index=False)
-         .agg(Price=("Price", "mean"),
-              PriceTT=("PriceTT", "first"))
-)
+# ==== KEEP STYLE, FIX DRIFT ====
+# 1) Bars should be one-per-month (if duplicates exist, keep the LAST; preserves order & look)
+bars_df = f.drop_duplicates(subset=["MonthLabel"], keep="last").copy()
 
-# Build a single domain shared by all layers (actual months + forecast months)
-domain_order = list(bars_df["MonthLabel"]) + [m for m in scrap_fc_df["MonthLabel"] if m not in set(bars_df["MonthLabel"])]
+# 2) Build a single chronological domain used by BOTH layers
+domain_order = bars_df["MonthLabel"].tolist() + [
+    m for m in scrap_fc_df["MonthLabel"].tolist() if m not in set(bars_df["MonthLabel"])
+]
 
-# ------- Layers (shared scales) -------
+# 3) Bars (original style) + explicit shared domain + no stacking
 bars_actual = (
     alt.Chart(bars_df)
     .mark_bar(size=_bar_size(len(bars_df)))
@@ -217,14 +212,14 @@ bars_actual = (
         x=alt.X(
             "MonthLabel:N",
             title="Months",
-            sort=None,
+            sort=domain_order,  # chronological, not alphabetical
             axis=alt.Axis(labelAngle=0),
             scale=alt.Scale(domain=domain_order, paddingOuter=0.35, paddingInner=0.45),
         ),
         y=alt.Y(
             "Price:Q",
             title="Price",
-            stack=None,                      # <-- prevent any stacking
+            stack=None,  # ensure no stacking even if dupes sneak in
             scale=alt.Scale(zero=False, nice=True),
         ),
         tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
@@ -232,33 +227,31 @@ bars_actual = (
     )
 )
 
-# Solid line for actuals (use the SAME aggregated data as bars to guarantee match)
-line_actual = (
-    alt.Chart(bars_df)
+# 4) Line across actual + forecast (same domain; dotted for forecast)
+plot_scrap = pd.concat(
+    [f.assign(is_forecast=False), scrap_fc_df][
+        0:
+    ]  # just to emphasize order; no styling change
+).reset_index(drop=True)
+
+line_all = (
+    alt.Chart(plot_scrap)
     .mark_line(point=True)
     .encode(
-        x=alt.X("MonthLabel:N", sort=None,
-                scale=alt.Scale(domain=domain_order, paddingOuter=0.35, paddingInner=0.45)),
+        x=alt.X(
+            "MonthLabel:N",
+            sort=domain_order,
+            scale=alt.Scale(domain=domain_order, paddingOuter=0.35, paddingInner=0.45),
+        ),
         y=alt.Y("Price:Q", scale=alt.Scale(zero=False, nice=True)),
+        detail="is_forecast:N",
+        strokeDash=alt.condition(alt.datum.is_forecast, alt.value([4,3]), alt.value([1,0])),
         tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
                  alt.Tooltip("PriceTT:N", title="Price")],
     )
 )
 
-# Dotted line for forecast
-line_fc = (
-    alt.Chart(scrap_fc_df)
-    .mark_line(point=True, strokeDash=[4,3])
-    .encode(
-        x=alt.X("MonthLabel:N", sort=None,
-                scale=alt.Scale(domain=domain_order, paddingOuter=0.35, paddingInner=0.45)),
-        y=alt.Y("Price:Q", scale=alt.Scale(zero=False, nice=True)),
-        tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
-                 alt.Tooltip("PriceTT:N", title="Price")],
-    )
-)
-
-chart = _tidy((bars_actual + line_actual + line_fc).properties(height=430)).resolve_scale(x="shared", y="shared")
+chart = _tidy((bars_actual + line_all).properties(height=430)).resolve_scale(x="shared", y="shared")
 st.altair_chart(chart, use_container_width=True)
 
 # ------- Summary (actuals) -------
@@ -505,20 +498,16 @@ labels2_bg = (
     alt.Chart(b_act)
     .mark_text(dy=-16, fontSize=12, fontWeight="bold",
                stroke="white", strokeWidth=4, color="white")
-    .encode(
-        x=alt.X("QuarterLabel:N", sort=None),
-        y=alt.Y("Price:Q"),
-        text="PriceTT:N",
-    )
+    .encode(x=alt.X("QuarterLabel:N", sort=None),
+            y=alt.Y("Price:Q"),
+            text="PriceTT:N")
 )
 labels2_fg = (
     alt.Chart(b_act)
     .mark_text(dy=-16, fontSize=12, fontWeight="bold", color="black")
-    .encode(
-        x=alt.X("QuarterLabel:N", sort=None),
-        y=alt.Y("Price:Q"),
-        text="PriceTT:N",
-    )
+    .encode(x=alt.X("QuarterLabel:N", sort=None),
+            y=alt.Y("Price:Q"),
+            text="PriceTT:N")
 )
 
 # --- Line (solid actual, dotted forecast)
