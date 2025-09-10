@@ -4,6 +4,7 @@ from html import escape
 from typing import List, Dict
 from pathlib import Path
 import re
+import math
 
 import altair as alt
 import pandas as pd
@@ -52,16 +53,14 @@ st.markdown(
 def _tidy(chart: alt.Chart) -> alt.Chart:
     return (
         chart
-        # add space around the plot so edges don’t clip
-        .properties(padding={"left": 48, "right": 48, "top": 12, "bottom": 36})
-        # remove hard frame that sometimes clips marks
+        .properties(padding={"left": 56, "right": 56, "top": 16, "bottom": 42})
         .configure_view(strokeWidth=0)
-        # improve axis spacing so labels/ticks don’t overlap edges
         .configure_axis(
             labelPadding=8,
             titlePadding=10,
             labelFontSize=12,
             titleFontSize=12,
+            grid=True,                     # show grid like the first image
         )
         .configure_axisX(labelAngle=0)
     )
@@ -211,13 +210,12 @@ bars_actual = (
             title="Months",
             sort=None,
             axis=alt.Axis(labelAngle=0),
-            # add outer padding so first/last bars are not flush with the frame
             scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45),
         ),
         y=alt.Y(
             "Price:Q",
             title="Price",
-            scale=alt.Scale(zero=False, nice=True),  # leave headroom
+            scale=alt.Scale(zero=False, nice=True),
         ),
         tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
                  alt.Tooltip("PriceTT:N", title="Price")],
@@ -299,7 +297,7 @@ st.markdown(
 )
 
 # ================================
-# BILLET PRICES DASHBOARD (with ₹ tooltip + forecast)
+# BILLET PRICES DASHBOARD (₹ tooltip/labels + exact axis styling + forecast)
 # ================================
 st.divider()
 st.markdown('<div class="title">Billet Prices</div>', unsafe_allow_html=True)
@@ -463,10 +461,14 @@ b_act = billet_df.copy()
 b_act["is_forecast"] = False
 billet_plot = pd.concat([b_act, billet_fc_df], ignore_index=True)
 
-# --- Chart (anti-clipping)
+# ----- Axis domain like first image (start at 0 and add headroom)
+max_actual = float(b_act["Price"].max())
+domain_top = (math.ceil(max_actual / 5000) * 5000) + 5000  # round to nearest 5k, +5k headroom
+
+# --- Chart layers (match first image styling, keep blue bars)
 bars2 = (
-    alt.Chart(billet_plot[billet_plot["is_forecast"] == False])
-    .mark_bar(size=28)
+    alt.Chart(b_act)
+    .mark_bar(size=38, color="#1f77b4")  # blue columns
     .encode(
         x=alt.X(
             "QuarterLabel:N",
@@ -477,24 +479,33 @@ bars2 = (
         ),
         y=alt.Y(
             "Price:Q",
-            title="Billet cost per MT",
-            scale=alt.Scale(zero=False, nice=True),
+            title="Price in ₹",
+            scale=alt.Scale(domain=(0, domain_top), nice=False, zero=True),
+            axis=alt.Axis(labelExpr="'₹' + format(datum.value, ',d')"),
         ),
         tooltip=[alt.Tooltip("QuarterLabel:N", title="Quarter"),
                  alt.Tooltip("PriceTT:N",      title="Price")],
     )
 )
 
+# value labels on top of bars (₹xx,xxx)
+labels2 = (
+    alt.Chart(b_act)
+    .mark_text(dy=-6, fontWeight="bold")
+    .encode(
+        x=alt.X("QuarterLabel:N", sort=None),
+        y=alt.Y("Price:Q"),
+        text="PriceTT:N",
+    )
+)
+
+# line across all (actual + dotted forecast)
 line2 = (
     alt.Chart(billet_plot)
     .mark_line(point=True)
     .encode(
-        x=alt.X(
-            "QuarterLabel:N",
-            sort=None,
-            scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45),
-        ),
-        y=alt.Y("Price:Q", scale=alt.Scale(zero=False, nice=True)),
+        x=alt.X("QuarterLabel:N", sort=None, scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45)),
+        y=alt.Y("Price:Q", scale=alt.Scale(domain=(0, domain_top), nice=False, zero=True)),
         detail="is_forecast:N",
         strokeDash=alt.condition(alt.datum.is_forecast, alt.value([4,3]), alt.value([1,0])),
         tooltip=[alt.Tooltip("QuarterLabel:N", title="Quarter"),
@@ -502,7 +513,7 @@ line2 = (
     )
 )
 
-chart2 = _tidy((bars2 + line2).properties(height=430))
+chart2 = _tidy((bars2 + labels2 + line2).properties(height=430, title=series_label))
 st.altair_chart(chart2, use_container_width=True)
 
 # --- Summary (actuals)
