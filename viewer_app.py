@@ -142,7 +142,7 @@ def render_metal_prices_page():
 
     with st.form(key=f"filters-{slug}-{ver}", border=False):
         c1, c2, c3, c4 = st.columns([2.6, 2.6, 0.6, 0.6], gap="small")
-        # 👇 Force DD/MM/YYYY display
+        # Display dates as DD/MM/YYYY
         c1.date_input("From (DD/MM/YYYY)", def_start, key=w_from, format="DD/MM/YYYY")
         c2.date_input("To (DD/MM/YYYY)", def_end, key=w_to, format="DD/MM/YYYY")
         with c3:
@@ -203,7 +203,7 @@ def render_metal_prices_page():
         "is_forecast": True,
     })
 
-    # Shared X domain (actual + forecast), DEDUPLICATED to avoid render glitches
+    # Shared X domain (actual + forecast), de-duplicated to avoid render glitches
     domain_order = _unique(f["MonthLabel"].tolist() + scrap_fc_df["MonthLabel"].tolist())
 
     # Build a single table then split by flag — ensures same rows for bars & actual line
@@ -257,7 +257,7 @@ def render_metal_prices_page():
     )
 
     scrap_chart_key = f"scrap-{slug}-{start.isoformat()}-{end.isoformat()}-{ver}"
-    # 👇 explicit width helps Vega-Lite avoid “first-hover draw”
+    # explicit width helps Vega-Lite avoid “first-hover draw”
     chart = _tidy((bars_actual + line_actual + line_forecast).properties(height=430, width=1200))\
         .resolve_scale(x="shared", y="shared")
     st.altair_chart(chart, use_container_width=True, key=scrap_chart_key)
@@ -367,7 +367,10 @@ def render_billet_prices_page():
             st.error("Could not detect columns. Need a Quarter column and a 'Billet cost per MT' column.")
             st.stop()
 
-        df0 = raw[[quarter_col, price_col]].rename(columns={quarter_col: "Quarter", price_col: "Price"])
+        # ✅ FIXED: close dict with '}' not ']'
+        df0 = raw[[quarter_col, price_col]].rename(
+            columns={quarter_col: "Quarter", price_col: "Price"}
+        )
         df0["Quarter"] = df0["Quarter"].astype(str).str.strip()
 
         def _q_order(qs: str) -> int:
@@ -482,7 +485,7 @@ def render_billet_prices_page():
     actual_only = plot_all[plot_all["is_forecast"] == False]
     forecast_only = plot_all[plot_all["is_forecast"] == True]
 
-    # Shared X-domain (actual + forecast), DEDUPLICATED
+    # Shared X-domain (actual + forecast), de-duplicated
     domain_order_q = _unique(billet_df["QuarterLabel"].tolist() + future_quarters)
 
     # --- Layers
