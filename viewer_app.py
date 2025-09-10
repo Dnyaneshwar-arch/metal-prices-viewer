@@ -52,9 +52,11 @@ st.markdown(
 def _tidy(chart: alt.Chart) -> alt.Chart:
     return (
         chart
-        # FIX: use an explicit width to avoid autosize timing race
-        .properties(width=1100, padding={"left": 48, "right": 48, "top": 12, "bottom": 36})
+        # add space around the plot so edges don’t clip
+        .properties(padding={"left": 48, "right": 48, "top": 12, "bottom": 36})
+        # remove hard frame that sometimes clips marks
         .configure_view(strokeWidth=0)
+        # improve axis spacing so labels/ticks don’t overlap edges
         .configure_axis(
             labelPadding=8,
             titlePadding=10,
@@ -195,21 +197,26 @@ scrap_fc_df = pd.DataFrame({
     "is_forecast": True,
 })
 
+# Explicit, shared X-domain (actual + forecast) to keep bars/line aligned
+domain_order = f["MonthLabel"].tolist() + [
+    m for m in scrap_fc_df["MonthLabel"].tolist() if m not in set(f["MonthLabel"])
+]
+
 f_act = f.copy()
 f_act["is_forecast"] = False
 plot_scrap = pd.concat([f_act, scrap_fc_df], ignore_index=True)
 
 # ------- Chart (anti-clipping) -------
 bars_actual = (
-    alt.Chart(plot_scrap[plot_scrap["is_forecast"] == False])
+    alt.Chart(f_act)
     .mark_bar(size=_bar_size(len(f)))
     .encode(
         x=alt.X(
             "MonthLabel:N",
             title="Months",
-            sort=None,
+            sort=domain_order,
             axis=alt.Axis(labelAngle=0),
-            scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45),
+            scale=alt.Scale(domain=domain_order, paddingOuter=0.35, paddingInner=0.45),
         ),
         y=alt.Y(
             "Price:Q",
@@ -227,8 +234,8 @@ line_all = (
     .encode(
         x=alt.X(
             "MonthLabel:N",
-            sort=None,
-            scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45),
+            sort=domain_order,
+            scale=alt.Scale(domain=domain_order, paddingOuter=0.35, paddingInner=0.45),
         ),
         y=alt.Y("Price:Q", scale=alt.Scale(zero=False, nice=True)),
         detail="is_forecast:N",
@@ -238,11 +245,11 @@ line_all = (
     )
 )
 
-# UNIQUE KEY => immediate remount on any change
+# Force full re-mount on any change (fixes "only appears after hover")
 scrap_chart_key = f"scrap-{slug}-{start.isoformat()}-{end.isoformat()}-{ver}"
 
-chart = _tidy((bars_actual + line_all).properties(height=430))
-st.altair_chart(chart, use_container_width=False, key=scrap_chart_key)  # use fixed width above
+chart = _tidy((bars_actual + line_all).properties(height=430)).resolve_scale(x="shared", y="shared")
+st.altair_chart(chart, use_container_width=True, key=scrap_chart_key)
 
 # ------- Summary (actuals) -------
 def _fmt_money(x: float) -> str:
@@ -463,7 +470,12 @@ b_act = billet_df.copy()
 b_act["is_forecast"] = False
 billet_plot = pd.concat([b_act, billet_fc_df], ignore_index=True)
 
-# --- Chart (anti-clipping)
+# Shared X-domain (actual + forecast)
+domain_order_q = billet_df["QuarterLabel"].tolist() + [
+    q for q in future_quarters if q not in set(billet_df["QuarterLabel"])
+]
+
+# --- Chart
 bars2 = (
     alt.Chart(b_act)
     .mark_bar(size=28)
@@ -471,9 +483,9 @@ bars2 = (
         x=alt.X(
             "QuarterLabel:N",
             title="Quarter",
-            sort=None,
+            sort=domain_order_q,
             axis=alt.Axis(labelAngle=0),
-            scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45),
+            scale=alt.Scale(domain=domain_order_q, paddingOuter=0.35, paddingInner=0.45),
         ),
         y=alt.Y(
             "Price:Q",
@@ -491,8 +503,8 @@ line2 = (
     .encode(
         x=alt.X(
             "QuarterLabel:N",
-            sort=None,
-            scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45),
+            sort=domain_order_q,
+            scale=alt.Scale(domain=domain_order_q, paddingOuter=0.35, paddingInner=0.45),
         ),
         y=alt.Y("Price:Q", scale=alt.Scale(zero=False, nice=True)),
         detail="is_forecast:N",
@@ -504,8 +516,8 @@ line2 = (
 
 billet_chart_key = f"billet-{series_label}-{q_from}-{q_to}-{ver2}"
 
-chart2 = _tidy((bars2 + line2).properties(height=430))
-st.altair_chart(chart2, use_container_width=False, key=billet_chart_key)  # fixed width in _tidy
+chart2 = _tidy((bars2 + line2).properties(height=430)).resolve_scale(x="shared", y="shared")
+st.altair_chart(chart2, use_container_width=True, key=billet_chart_key)
 
 # --- Summary (actuals)
 def _fmt_int(n: float) -> str:
@@ -529,6 +541,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
+# --- Forecast summary (Billet)
 billet_fc_pairs = [f"{lbl}: {_fmt_inr(val)}" for lbl, val in zip(future_quarters, billet_fc)]
 st.markdown(
     f"""
