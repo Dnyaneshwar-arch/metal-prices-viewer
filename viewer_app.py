@@ -53,7 +53,7 @@ def _tidy(chart: alt.Chart) -> alt.Chart:
     return (
         chart
         # add space around the plot so edges don’t clip
-        .properties(padding={"left": 48, "right": 48, "top": 12, "bottom": 36})
+        .properties(padding={"left": 48, "right": 48, "top": 12, "bottom": 36}, width="container")
         # remove hard frame that sometimes clips marks
         .configure_view(strokeWidth=0)
         # improve axis spacing so labels/ticks don’t overlap edges
@@ -241,8 +241,11 @@ line_all = (
     )
 )
 
+# IMPORTANT: give the chart a unique key so it fully re-renders when inputs change
+scrap_chart_key = f"scrap-{slug}-{start.isoformat()}-{end.isoformat()}-{ver}"
+
 chart = _tidy((bars_actual + line_all).properties(height=430))
-st.altair_chart(chart, use_container_width=True)
+st.altair_chart(chart, use_container_width=True, key=scrap_chart_key)
 
 # ------- Summary (actuals) -------
 def _fmt_money(x: float) -> str:
@@ -502,8 +505,11 @@ line2 = (
     )
 )
 
+# Unique key forces an immediate full redraw on any change
+billet_chart_key = f"billet-{series_label}-{q_from}-{q_to}-{ver2}"
+
 chart2 = _tidy((bars2 + line2).properties(height=430))
-st.altair_chart(chart2, use_container_width=True)
+st.altair_chart(chart2, use_container_width=True, key=billet_chart_key)
 
 # --- Summary (actuals)
 def _fmt_int(n: float) -> str:
