@@ -144,7 +144,7 @@ f = df.loc[mask].copy()
 if f.empty:
     st.info("No rows in this range."); st.stop()
 
-# ------- Plot data (original look preserved) -------
+# ------- Plot data (keep original look) -------
 f = f.sort_values("Month")
 f["MonthLabel"] = pd.to_datetime(f["Month"]).dt.strftime("%b %y").str.upper()
 
@@ -195,16 +195,25 @@ scrap_fc_df = pd.DataFrame({
     "is_forecast": True,
 })
 
-# ==== KEEP STYLE, FIX DRIFT ====
-# 1) Bars should be one-per-month (if duplicates exist, keep the LAST; preserves order & look)
+# ===== FIX 1: ensure one bar per month (no accidental stacking) =====
 bars_df = f.drop_duplicates(subset=["MonthLabel"], keep="last").copy()
 
-# 2) Build a single chronological domain used by BOTH layers
+# ===== FIX 2: shared X domain so line never drifts =====
 domain_order = bars_df["MonthLabel"].tolist() + [
     m for m in scrap_fc_df["MonthLabel"].tolist() if m not in set(bars_df["MonthLabel"])
 ]
 
-# 3) Bars (original style) + explicit shared domain + no stacking
+# ===== FIX 3: robust Y domain + explicit baseline (y2) so bars always render =====
+min_val = float(bars_df["Price"].min())
+max_val = float(bars_df["Price"].max())
+span = max(1e-9, max_val - min_val)
+
+# Padding that works for constant series too
+pad = max(0.2 * span, 0.05 * max_val, 0.5)  # at least 0.5 unit
+y_min = min_val - pad
+y_max = max_val + pad
+
+# ------- Layers -------
 bars_actual = (
     alt.Chart(bars_df)
     .mark_bar(size=_bar_size(len(bars_df)))
@@ -212,27 +221,23 @@ bars_actual = (
         x=alt.X(
             "MonthLabel:N",
             title="Months",
-            sort=domain_order,  # chronological, not alphabetical
+            sort=domain_order,
             axis=alt.Axis(labelAngle=0),
             scale=alt.Scale(domain=domain_order, paddingOuter=0.35, paddingInner=0.45),
         ),
         y=alt.Y(
             "Price:Q",
             title="Price",
-            stack=None,  # ensure no stacking even if dupes sneak in
-            scale=alt.Scale(zero=False, nice=True),
+            stack=None,
+            scale=alt.Scale(domain=(y_min, y_max), nice=False),
         ),
+        y2=alt.Y2(value=y_min),  # explicit baseline INSIDE the domain
         tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
                  alt.Tooltip("PriceTT:N", title="Price")],
     )
 )
 
-# 4) Line across actual + forecast (same domain; dotted for forecast)
-plot_scrap = pd.concat(
-    [f.assign(is_forecast=False), scrap_fc_df][
-        0:
-    ]  # just to emphasize order; no styling change
-).reset_index(drop=True)
+plot_scrap = pd.concat([f.assign(is_forecast=False), scrap_fc_df], ignore_index=True)
 
 line_all = (
     alt.Chart(plot_scrap)
@@ -243,7 +248,7 @@ line_all = (
             sort=domain_order,
             scale=alt.Scale(domain=domain_order, paddingOuter=0.35, paddingInner=0.45),
         ),
-        y=alt.Y("Price:Q", scale=alt.Scale(zero=False, nice=True)),
+        y=alt.Y("Price:Q", scale=alt.Scale(domain=(y_min, y_max), nice=False)),
         detail="is_forecast:N",
         strokeDash=alt.condition(alt.datum.is_forecast, alt.value([4,3]), alt.value([1,0])),
         tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
