@@ -52,9 +52,17 @@ st.markdown(
 def _tidy(chart: alt.Chart) -> alt.Chart:
     return (
         chart
+        # add space around the plot so edges don’t clip
         .properties(padding={"left": 48, "right": 48, "top": 12, "bottom": 36})
+        # remove hard frame that sometimes clips marks
         .configure_view(strokeWidth=0)
-        .configure_axis(labelPadding=8, titlePadding=10, labelFontSize=12, titleFontSize=12)
+        # improve axis spacing so labels/ticks don’t overlap edges
+        .configure_axis(
+            labelPadding=8,
+            titlePadding=10,
+            labelFontSize=12,
+            titleFontSize=12,
+        )
         .configure_axisX(labelAngle=0)
     )
 
@@ -138,12 +146,9 @@ f = df.loc[mask].copy()
 if f.empty:
     st.info("No rows in this range."); st.stop()
 
-# ------- Plot data (de-dup each month to prevent stacking) -------
+# ------- Plot data -------
 f = f.sort_values("Month")
 f["MonthLabel"] = pd.to_datetime(f["Month"]).dt.strftime("%b %y").str.upper()
-# keep single row per MonthLabel (mean in case of duplicates)
-f = (f.groupby(["Month", "MonthLabel"], as_index=False, sort=False)
-       .agg(Price=("Price", "mean")))
 
 def _bar_size(n: int) -> int:
     approx_width = 1100
@@ -180,7 +185,7 @@ def _forecast_series(y: pd.Series, periods: int, seasonal_periods: int) -> pd.Se
             pass
     return pd.Series([float(y.iloc[-1])] * periods)
 
-# Build future months (3-month horizon)
+# Build future month labels (3-month horizon)
 last_month = pd.to_datetime(f["Month"].max())
 future_months = pd.date_range(last_month + pd.offsets.MonthBegin(1), periods=3, freq="MS")
 scrap_fc = _forecast_series(f["Price"].reset_index(drop=True), periods=3, seasonal_periods=12)
@@ -196,24 +201,24 @@ f_act = f.copy()
 f_act["is_forecast"] = False
 plot_scrap = pd.concat([f_act, scrap_fc_df], ignore_index=True)
 
-# Shared Y domain so line always sits on bar tops
-ymin_s, ymax_s = float(plot_scrap["Price"].min()), float(plot_scrap["Price"].max())
-y_dom_s = [max(0.0, ymin_s * 0.95), ymax_s * 1.05]
-
-# ------- Chart -------
+# ------- Chart (anti-clipping) -------
 bars_actual = (
     alt.Chart(plot_scrap[plot_scrap["is_forecast"] == False])
     .mark_bar(size=_bar_size(len(f)))
     .encode(
-        x=alt.X("MonthLabel:N",
-                title="Months",
-                sort=list(f["MonthLabel"].tolist()),
-                axis=alt.Axis(labelAngle=0),
-                scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45)),
-        y=alt.Y("Price:Q",
-                title="Price",
-                scale=alt.Scale(domain=y_dom_s, nice=False, zero=False),
-                stack=None),                       # <-- prevent stacking if any duplicate slips in
+        x=alt.X(
+            "MonthLabel:N",
+            title="Months",
+            sort=None,
+            axis=alt.Axis(labelAngle=0),
+            # add outer padding so first/last bars are not flush with the frame
+            scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45),
+        ),
+        y=alt.Y(
+            "Price:Q",
+            title="Price",
+            scale=alt.Scale(zero=False, nice=True),  # leave headroom
+        ),
         tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
                  alt.Tooltip("PriceTT:N", title="Price")],
     )
@@ -223,10 +228,12 @@ line_all = (
     alt.Chart(plot_scrap)
     .mark_line(point=True)
     .encode(
-        x=alt.X("MonthLabel:N",
-                sort=list(plot_scrap["MonthLabel"].tolist()),
-                scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45)),
-        y=alt.Y("Price:Q", scale=alt.Scale(domain=y_dom_s, nice=False, zero=False)),
+        x=alt.X(
+            "MonthLabel:N",
+            sort=None,
+            scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45),
+        ),
+        y=alt.Y("Price:Q", scale=alt.Scale(zero=False, nice=True)),
         detail="is_forecast:N",
         strokeDash=alt.condition(alt.datum.is_forecast, alt.value([4,3]), alt.value([1,0])),
         tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
@@ -234,7 +241,7 @@ line_all = (
     )
 )
 
-chart = _tidy((bars_actual + line_all).properties(height=430)).resolve_scale(y='shared')
+chart = _tidy((bars_actual + line_all).properties(height=430))
 st.altair_chart(chart, use_container_width=True)
 
 # ------- Summary (actuals) -------
@@ -358,10 +365,6 @@ def _load_billet_df(series_label: str) -> pd.DataFrame:
     df0["QuarterLabel"] = df0["Quarter"].str.replace("-", " ", regex=False)
     df0["Price"] = pd.to_numeric(df0["Price"], errors="coerce")
     df0 = df0.dropna(subset=["Price"])
-
-    # ensure single row per quarter (prevents stacking)
-    df0 = (df0.groupby(["QuarterLabel"], as_index=False)
-              .agg(Price=("Price", "mean")))
     st.caption(f"Source: {src.name} • sheet: {sheet_name}")
     return df0
 
@@ -460,24 +463,23 @@ b_act = billet_df.copy()
 b_act["is_forecast"] = False
 billet_plot = pd.concat([b_act, billet_fc_df], ignore_index=True)
 
-# Shared Y domain for perfect overlay
-ymin_b, ymax_b = float(billet_plot["Price"].min()), float(billet_plot["Price"].max())
-y_dom_b = [max(0.0, ymin_b * 0.95), ymax_b * 1.05]
-
-# --- Chart
+# --- Chart (anti-clipping)
 bars2 = (
     alt.Chart(billet_plot[billet_plot["is_forecast"] == False])
     .mark_bar(size=28)
     .encode(
-        x=alt.X("QuarterLabel:N",
-                title="Quarter",
-                sort=list(billet_df["QuarterLabel"].tolist()),
-                axis=alt.Axis(labelAngle=0),
-                scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45)),
-        y=alt.Y("Price:Q",
-                title="Billet cost per MT",
-                scale=alt.Scale(domain=y_dom_b, nice=False, zero=False),
-                stack=None),                         # <-- prevent stacking
+        x=alt.X(
+            "QuarterLabel:N",
+            title="Quarter",
+            sort=None,
+            axis=alt.Axis(labelAngle=0),
+            scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45),
+        ),
+        y=alt.Y(
+            "Price:Q",
+            title="Billet cost per MT",
+            scale=alt.Scale(zero=False, nice=True),
+        ),
         tooltip=[alt.Tooltip("QuarterLabel:N", title="Quarter"),
                  alt.Tooltip("PriceTT:N",      title="Price")],
     )
@@ -487,10 +489,12 @@ line2 = (
     alt.Chart(billet_plot)
     .mark_line(point=True)
     .encode(
-        x=alt.X("QuarterLabel:N",
-                sort=list(billet_plot["QuarterLabel"].tolist()),
-                scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45)),
-        y=alt.Y("Price:Q", scale=alt.Scale(domain=y_dom_b, nice=False, zero=False)),
+        x=alt.X(
+            "QuarterLabel:N",
+            sort=None,
+            scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45),
+        ),
+        y=alt.Y("Price:Q", scale=alt.Scale(zero=False, nice=True)),
         detail="is_forecast:N",
         strokeDash=alt.condition(alt.datum.is_forecast, alt.value([4,3]), alt.value([1,0])),
         tooltip=[alt.Tooltip("QuarterLabel:N", title="Quarter"),
@@ -498,7 +502,7 @@ line2 = (
     )
 )
 
-chart2 = _tidy((bars2 + line2).properties(height=430)).resolve_scale(y='shared')
+chart2 = _tidy((bars2 + line2).properties(height=430))
 st.altair_chart(chart2, use_container_width=True)
 
 # --- Summary (actuals)
