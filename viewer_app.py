@@ -52,11 +52,9 @@ st.markdown(
 def _tidy(chart: alt.Chart) -> alt.Chart:
     return (
         chart
-        # add space around the plot so edges don’t clip
-        .properties(padding={"left": 48, "right": 48, "top": 12, "bottom": 36}, width="container")
-        # remove hard frame that sometimes clips marks
+        # FIX: use an explicit width to avoid autosize timing race
+        .properties(width=1100, padding={"left": 48, "right": 48, "top": 12, "bottom": 36})
         .configure_view(strokeWidth=0)
-        # improve axis spacing so labels/ticks don’t overlap edges
         .configure_axis(
             labelPadding=8,
             titlePadding=10,
@@ -211,13 +209,12 @@ bars_actual = (
             title="Months",
             sort=None,
             axis=alt.Axis(labelAngle=0),
-            # add outer padding so first/last bars are not flush with the frame
             scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45),
         ),
         y=alt.Y(
             "Price:Q",
             title="Price",
-            scale=alt.Scale(zero=False, nice=True),  # leave headroom
+            scale=alt.Scale(zero=False, nice=True),
         ),
         tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
                  alt.Tooltip("PriceTT:N", title="Price")],
@@ -241,11 +238,11 @@ line_all = (
     )
 )
 
-# IMPORTANT: give the chart a unique key so it fully re-renders when inputs change
+# UNIQUE KEY => immediate remount on any change
 scrap_chart_key = f"scrap-{slug}-{start.isoformat()}-{end.isoformat()}-{ver}"
 
 chart = _tidy((bars_actual + line_all).properties(height=430))
-st.altair_chart(chart, use_container_width=True, key=scrap_chart_key)
+st.altair_chart(chart, use_container_width=False, key=scrap_chart_key)  # use fixed width above
 
 # ------- Summary (actuals) -------
 def _fmt_money(x: float) -> str:
@@ -468,7 +465,7 @@ billet_plot = pd.concat([b_act, billet_fc_df], ignore_index=True)
 
 # --- Chart (anti-clipping)
 bars2 = (
-    alt.Chart(billet_plot[billet_plot["is_forecast"] == False])
+    alt.Chart(b_act)
     .mark_bar(size=28)
     .encode(
         x=alt.X(
@@ -505,11 +502,10 @@ line2 = (
     )
 )
 
-# Unique key forces an immediate full redraw on any change
 billet_chart_key = f"billet-{series_label}-{q_from}-{q_to}-{ver2}"
 
 chart2 = _tidy((bars2 + line2).properties(height=430))
-st.altair_chart(chart2, use_container_width=True, key=billet_chart_key)
+st.altair_chart(chart2, use_container_width=False, key=billet_chart_key)  # fixed width in _tidy
 
 # --- Summary (actuals)
 def _fmt_int(n: float) -> str:
@@ -533,7 +529,6 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# --- Forecast summary (Billet)
 billet_fc_pairs = [f"{lbl}: {_fmt_inr(val)}" for lbl, val in zip(future_quarters, billet_fc)]
 st.markdown(
     f"""
