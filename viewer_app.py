@@ -51,6 +51,18 @@ st.markdown(
 
       /* Sidebar look */
       .menu-title{ font-weight:800; font-size:16px; margin: 6px 0 8px; }
+
+      /* ===== Fade transition =====
+         Any section wrapped in .fade-wrap will fade in on each render.
+      */
+      .fade-wrap{
+        animation: fadeInSection 260ms ease-in both;
+        will-change: opacity, transform;
+      }
+      @keyframes fadeInSection{
+        from { opacity: 0; transform: translateY(6px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -103,6 +115,9 @@ def _unique(seq):
 
 # ---------------- Page 1: Metal Prices (Commodity) ----------------
 def render_metal_prices_page():
+    # Wrap ENTIRE page contents in a fade container
+    st.markdown('<div class="fade-wrap">', unsafe_allow_html=True)
+
     st.markdown('<div class="title">Metal Prices Dashboards</div>', unsafe_allow_html=True)
 
     DEFAULT_START = pd.to_datetime("2025-04-01").date()
@@ -111,7 +126,9 @@ def render_metal_prices_page():
     config = load_config()
     sheets: List[Dict] = config.get("sheets", []) if isinstance(config, dict) else config
     (if_not := (not sheets)) and st.info("No published data yet.") or None
-    if if_not: st.stop()
+    if if_not: 
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.stop()
 
     labels = [s.get("label") or s.get("sheet") or s.get("slug") for s in sheets]
     slugs = [s.get("slug") for s in sheets]
@@ -122,6 +139,7 @@ def render_metal_prices_page():
     df = load_sheet(slug)
     if df.empty:
         st.warning("No data for this commodity.")
+        st.markdown("</div>", unsafe_allow_html=True)
         st.stop()
 
     min_d = pd.to_datetime(df["Month"].min()).date()
@@ -166,7 +184,9 @@ def render_metal_prices_page():
         start_val = st.session_state[w_from]
         end_val = st.session_state[w_to]
         if start_val > end_val:
-            st.error("From date must be ≤ To date."); st.stop()
+            st.error("From date must be ≤ To date."); 
+            st.markdown("</div>", unsafe_allow_html=True)
+            st.stop()
         st.session_state[k_from] = start_val
         st.session_state[k_to] = end_val
 
@@ -176,7 +196,9 @@ def render_metal_prices_page():
     mask = (df["Month"].dt.date >= start) & (df["Month"].dt.date <= end)
     f = df.loc[mask].copy()
     if f.empty:
-        st.info("No rows in this range."); st.stop()
+        st.info("No rows in this range."); 
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.stop()
 
     # ------- Plot data -------
     f = f.sort_values("Month")
@@ -316,8 +338,14 @@ def render_metal_prices_page():
         unsafe_allow_html=True,
     )
 
+    # Close fade wrapper
+    st.markdown("</div>", unsafe_allow_html=True)
+
 # ---------------- Page 2: Billet Prices ----------------
 def render_billet_prices_page():
+    # Wrap ENTIRE page contents in a fade container
+    st.markdown('<div class="fade-wrap">', unsafe_allow_html=True)
+
     st.markdown('<div class="title">Billet Prices</div>', unsafe_allow_html=True)
 
     BASE_DIR = Path(__file__).parent.resolve()
@@ -351,11 +379,13 @@ def render_billet_prices_page():
         src = _find_billet_file()
         if not src:
             st.error("Billet Excel not found. Put **Billet cost.xlsx** in `data/` or `data/current/` (or next to this file).")
+            st.markdown("</div>", unsafe_allow_html=True)
             st.stop()
         try:
             xls = pd.ExcelFile(src)
         except Exception as e:
             st.error(f"Could not open {src.name}: {e}. Ensure `openpyxl` is in requirements.txt.")
+            st.markdown("</div>", unsafe_allow_html=True)
             st.stop()
 
         sheet_name = _resolve_sheet_name(xls, series_label)
@@ -365,6 +395,7 @@ def render_billet_prices_page():
         price_col   = next((c for c in raw.columns if re.search(r"billet.*(per)?.*mt", str(c), re.I)), None)
         if quarter_col is None or price_col is None:
             st.error("Could not detect columns. Need a Quarter column and a 'Billet cost per MT' column.")
+            st.markdown("</div>", unsafe_allow_html=True)
             st.stop()
 
         # ✅ FIXED: close dict with '}' not ']'
@@ -391,7 +422,9 @@ def render_billet_prices_page():
     series_label = st.selectbox("Select Billet Series", BILLET_SERIES_LABELS, index=0, key="billet-series")
     billet_df_full = _load_billet_df(series_label)
     if billet_df_full.empty:
-        st.info("No billet rows."); st.stop()
+        st.info("No billet rows."); 
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.stop()
 
     quarters     = billet_df_full["QuarterLabel"].tolist()
     q_start_def  = quarters[0]
@@ -436,7 +469,9 @@ def render_billet_prices_page():
         sel_from = st.session_state[wq_from]
         sel_to   = st.session_state[wq_to]
         if quarters.index(sel_from) > quarters.index(sel_to):
-            st.error("From Quarter must be ≤ To Quarter."); st.stop()
+            st.error("From Quarter must be ≤ To Quarter."); 
+            st.markdown("</div>", unsafe_allow_html=True)
+            st.stop()
         st.session_state[kq_from] = sel_from
         st.session_state[kq_to]   = sel_to
 
@@ -445,7 +480,9 @@ def render_billet_prices_page():
     i_from = quarters.index(q_from); i_to = quarters.index(q_to)
     billet_df = billet_df_full.iloc[i_from:i_to+1].copy()
     if billet_df.empty:
-        st.info("No rows in this quarter range."); st.stop()
+        st.info("No rows in this quarter range."); 
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.stop()
 
     def _fmt_inr(n: float) -> str:
         try:
@@ -567,6 +604,9 @@ def render_billet_prices_page():
     """,
         unsafe_allow_html=True,
     )
+
+    # Close fade wrapper
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # ---------------- Sidebar Navigation ----------------
 st.sidebar.markdown('<div class="menu-title">☰ Menu</div>', unsafe_allow_html=True)
