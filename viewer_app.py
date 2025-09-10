@@ -22,7 +22,7 @@ from data_utils import load_config, load_sheet
 st.set_page_config(
     page_title="Metal Prices Dashboards",
     layout="wide",
-    initial_sidebar_state="expanded",  # sidebar can be hidden/shown with the arrow
+    initial_sidebar_state="expanded",
 )
 
 st.markdown(
@@ -49,11 +49,7 @@ st.markdown(
       }
       .summary-box b{ color:#0B5CAB; }
 
-      /* Sidebar styling to look like a left menu */
-      section[data-testid="stSidebar"] .css-1d391kg,  /* legacy selector fallback */
-      section[data-testid="stSidebar"] div[role="radiogroup"] {
-        gap:.35rem;
-      }
+      /* Sidebar look */
       .menu-title{ font-weight:800; font-size:16px; margin: 6px 0 8px; }
     </style>
     """,
@@ -62,7 +58,6 @@ st.markdown(
 
 # ---------------- Helpers shared by both pages ----------------
 def _tidy(chart: alt.Chart) -> alt.Chart:
-    """Apply consistent anti-clipping config on Altair charts."""
     return (
         chart
         .properties(padding={"left": 48, "right": 48, "top": 12, "bottom": 36})
@@ -72,7 +67,6 @@ def _tidy(chart: alt.Chart) -> alt.Chart:
     )
 
 def _forecast_series(y: pd.Series, periods: int, seasonal_periods: int) -> pd.Series:
-    """Holt–Winters forecast with safe fallback."""
     if len(y) < 3:
         return pd.Series([float(y.iloc[-1])] * periods, index=range(periods))
     if _HAS_STATSMODELS:
@@ -203,14 +197,18 @@ def render_metal_prices_page():
         m for m in scrap_fc_df["MonthLabel"].tolist() if m not in set(f["MonthLabel"])
     ]
 
+    # Build a single table then split by flag — ensures same rows for bars & actual line
     f_act = f.copy()
     f_act["is_forecast"] = False
-    plot_scrap = pd.concat([f_act, scrap_fc_df], ignore_index=True)
+    plot_all = pd.concat([f_act, scrap_fc_df], ignore_index=True)
 
-    # ------- Chart -------
+    actual_only = plot_all[plot_all["is_forecast"] == False]
+    forecast_only = plot_all[plot_all["is_forecast"] == True]
+
+    # ------- Layers -------
     bars_actual = (
-        alt.Chart(f_act)
-        .mark_bar(size=_bar_size(len(f)))
+        alt.Chart(actual_only)
+        .mark_bar(size=_bar_size(len(actual_only)))
         .encode(
             x=alt.X(
                 "MonthLabel:N",
@@ -225,25 +223,32 @@ def render_metal_prices_page():
         )
     )
 
-    line_all = (
-        alt.Chart(plot_scrap)
+    line_actual = (
+        alt.Chart(actual_only)
         .mark_line(point=True)
         .encode(
-            x=alt.X(
-                "MonthLabel:N",
-                sort=domain_order,
-                scale=alt.Scale(domain=domain_order, paddingOuter=0.35, paddingInner=0.45),
-            ),
+            x=alt.X("MonthLabel:N", sort=domain_order,
+                    scale=alt.Scale(domain=domain_order, paddingOuter=0.35, paddingInner=0.45)),
             y=alt.Y("Price:Q", scale=alt.Scale(zero=False, nice=True)),
-            detail="is_forecast:N",
-            strokeDash=alt.condition(alt.datum.is_forecast, alt.value([4,3]), alt.value([1,0])),
+            tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
+                     alt.Tooltip("PriceTT:N", title="Price")],
+        )
+    )
+
+    line_forecast = (
+        alt.Chart(forecast_only)
+        .mark_line(point=True, strokeDash=[4, 3])
+        .encode(
+            x=alt.X("MonthLabel:N", sort=domain_order,
+                    scale=alt.Scale(domain=domain_order, paddingOuter=0.35, paddingInner=0.45)),
+            y=alt.Y("Price:Q", scale=alt.Scale(zero=False, nice=True)),
             tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
                      alt.Tooltip("PriceTT:N", title="Price")],
         )
     )
 
     scrap_chart_key = f"scrap-{slug}-{start.isoformat()}-{end.isoformat()}-{ver}"
-    chart = _tidy((bars_actual + line_all).properties(height=430)).resolve_scale(x="shared", y="shared")
+    chart = _tidy((bars_actual + line_actual + line_forecast).properties(height=430)).resolve_scale(x="shared", y="shared")
     st.altair_chart(chart, use_container_width=True, key=scrap_chart_key)
 
     # ------- Summary (actuals) -------
@@ -288,7 +293,7 @@ def render_metal_prices_page():
     """
     st.markdown(summary_html, unsafe_allow_html=True)
 
-    # ------- Forecast summary (Scrap) -------
+    # ------- Forecast summary -------
     scrap_fc_pairs = [f"{d.strftime('%b %Y')}: {_fmt_money(v)}" for d, v in zip(future_months, scrap_fc)]
     st.markdown(
         f"""
@@ -461,16 +466,19 @@ def render_billet_prices_page():
 
     b_act = billet_df.copy()
     b_act["is_forecast"] = False
-    billet_plot = pd.concat([b_act, billet_fc_df], ignore_index=True)
+    plot_all = pd.concat([b_act, billet_fc_df], ignore_index=True)
+
+    actual_only = plot_all[plot_all["is_forecast"] == False]
+    forecast_only = plot_all[plot_all["is_forecast"] == True]
 
     # Shared X-domain (actual + forecast)
     domain_order_q = billet_df["QuarterLabel"].tolist() + [
         q for q in future_quarters if q not in set(billet_df["QuarterLabel"])
     ]
 
-    # --- Chart
+    # --- Layers
     bars2 = (
-        alt.Chart(b_act)
+        alt.Chart(actual_only)
         .mark_bar(size=28)
         .encode(
             x=alt.X(
@@ -486,25 +494,32 @@ def render_billet_prices_page():
         )
     )
 
-    line2 = (
-        alt.Chart(billet_plot)
+    line2_actual = (
+        alt.Chart(actual_only)
         .mark_line(point=True)
         .encode(
-            x=alt.X(
-                "QuarterLabel:N",
-                sort=domain_order_q,
-                scale=alt.Scale(domain=domain_order_q, paddingOuter=0.35, paddingInner=0.45),
-            ),
+            x=alt.X("QuarterLabel:N", sort=domain_order_q,
+                    scale=alt.Scale(domain=domain_order_q, paddingOuter=0.35, paddingInner=0.45)),
             y=alt.Y("Price:Q", scale=alt.Scale(zero=False, nice=True)),
-            detail="is_forecast:N",
-            strokeDash=alt.condition(alt.datum.is_forecast, alt.value([4,3]), alt.value([1,0])),
+            tooltip=[alt.Tooltip("QuarterLabel:N", title="Quarter"),
+                     alt.Tooltip("PriceTT:N",      title="Price")],
+        )
+    )
+
+    line2_forecast = (
+        alt.Chart(forecast_only)
+        .mark_line(point=True, strokeDash=[4, 3])
+        .encode(
+            x=alt.X("QuarterLabel:N", sort=domain_order_q,
+                    scale=alt.Scale(domain=domain_order_q, paddingOuter=0.35, paddingInner=0.45)),
+            y=alt.Y("Price:Q", scale=alt.Scale(zero=False, nice=True)),
             tooltip=[alt.Tooltip("QuarterLabel:N", title="Quarter"),
                      alt.Tooltip("PriceTT:N",      title="Price")],
         )
     )
 
     billet_chart_key = f"billet-{series_label}-{q_from}-{q_to}-{ver2}"
-    chart2 = _tidy((bars2 + line2).properties(height=430)).resolve_scale(x="shared", y="shared")
+    chart2 = _tidy((bars2 + line2_actual + line2_forecast).properties(height=430)).resolve_scale(x="shared", y="shared")
     st.altair_chart(chart2, use_container_width=True, key=billet_chart_key)
 
     # --- Summary
