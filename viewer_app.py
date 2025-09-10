@@ -118,13 +118,16 @@ def _open_fade_wrapper():
     cls_name = f"fadewrap_{seed}"
     st.markdown(
         f"""
-        <style>
+        <style id="fade-style-{seed}">
         @keyframes {anim_name} {{
-            from {{ opacity: 0; transform: translateY(6px); }}
-            to   {{ opacity: 1; transform: translateY(0); }}
+            0%   {{ opacity: 0; transform: translateY(10px); }}
+            100% {{ opacity: 1; transform: translateY(0); }}
         }}
         .{cls_name} {{
-            animation: {anim_name} 260ms ease-in both;
+            animation-name: {anim_name};
+            animation-duration: 480ms;
+            animation-timing-function: cubic-bezier(.2,.6,.2,1);
+            animation-fill-mode: both;
             will-change: opacity, transform;
         }}
         </style>
@@ -220,6 +223,7 @@ def render_metal_prices_page():
             st.stop()
         st.session_state[k_from] = start_val
         st.session_state[k_to] = end_val
+        _bump_anim_seed()  # <- fade on search, too
 
     start = st.session_state[k_from]
     end = st.session_state[k_to]
@@ -501,6 +505,7 @@ def render_billet_prices_page():
             st.stop()
         st.session_state[kq_from] = sel_from
         st.session_state[kq_to]   = sel_to
+        _bump_anim_seed()  # fade on search
 
     q_from = st.session_state[kq_from]
     q_to   = st.session_state[kq_to]
