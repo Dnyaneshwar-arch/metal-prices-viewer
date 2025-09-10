@@ -17,37 +17,6 @@ except Exception:
     _HAS_STATSMODELS = False
 
 from data_utils import load_config, load_sheet
-# ---------- Fade animation helpers ----------
-def _open_fade_wrapper():
-    """Inject a per-render CSS animation and open a wrapper <div>."""
-    seed = st.session_state.get("anim_seed", 0)
-    # remember which seed this render used so we can close it
-    st.session_state["__fade_seed"] = seed
-    anim = f"fadeIn_{seed}"
-    cls = f"fadewrap_{seed}"
-    st.markdown(
-        f"""
-        <style id="fade-style-{seed}">
-          @keyframes {anim} {{
-            0%   {{ opacity: 0; transform: translateY(10px); }}
-            100% {{ opacity: 1; transform: translateY(0); }}
-          }}
-          .{cls} {{
-            animation: {anim} 480ms cubic-bezier(.2,.6,.2,1) both;
-            will-change: opacity, transform;
-          }}
-        </style>
-        <div class="{cls}">
-        """,
-        unsafe_allow_html=True,
-    )
-
-def _close_fade_wrapper():
-    """Close the wrapper <div> inserted by _open_fade_wrapper()."""
-    seed = st.session_state.get("__fade_seed")
-    st.markdown(f"</div><!-- fade-{seed} -->", unsafe_allow_html=True)
-
-
 
 # ---------- Page & CSS ----------
 st.set_page_config(
@@ -87,8 +56,35 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# ---------- Fade animation helpers ----------
+def _open_fade_wrapper():
+    """Inject a per-render CSS animation and open a wrapper <div>."""
+    seed = st.session_state.get("anim_seed", 0)
+    st.session_state["__fade_seed"] = seed
+    anim = f"fadeIn_{seed}"
+    cls = f"fadewrap_{seed}"
+    st.markdown(
+        f"""
+        <style id="fade-style-{seed}">
+          @keyframes {anim} {{
+            0%   {{ opacity: 0; transform: translateY(10px); }}
+            100% {{ opacity: 1; transform: translateY(0); }}
+          }}
+          .{cls} {{
+            animation: {anim} 480ms cubic-bezier(.2,.6,.2,1) both;
+            will-change: opacity, transform;
+          }}
+        </style>
+        <div class="{cls}">
+        """,
+        unsafe_allow_html=True,
+    )
 
-# ---------------- Helpers ----------------
+def _close_fade_wrapper():
+    seed = st.session_state.get("__fade_seed")
+    st.markdown(f"</div><!-- fade-{seed} -->", unsafe_allow_html=True)
+
+# ---------------- Helpers shared by both pages ----------------
 def _tidy(chart: alt.Chart) -> alt.Chart:
     return (
         chart
@@ -123,57 +119,8 @@ def _bar_size(n: int) -> int:
     size = int(approx_width / max(1, n) * 0.65)
     return max(8, min(42, size))
 
-def _unique(seq):
-    """Keep order but drop duplicates for stable Vega-Lite domains."""
-    seen = set()
-    out = []
-    for x in seq:
-        if x not in seen:
-            seen.add(x)
-            out.append(x)
-    return out
-
-
-# ===== Animation seed utilities =====
-if "anim_seed" not in st.session_state:
-    st.session_state["anim_seed"] = 0
-
-def _bump_anim_seed():
-    st.session_state["anim_seed"] += 1
-
-def _open_fade_wrapper():
-    """Emit a unique animation each render based on anim_seed."""
-    seed = st.session_state.get("anim_seed", 0)
-    anim_name = f"fadeIn_{seed}"
-    cls_name = f"fadewrap_{seed}"
-    st.markdown(
-        f"""
-        <style id="fade-style-{seed}">
-        @keyframes {anim_name} {{
-            0%   {{ opacity: 0; transform: translateY(10px); }}
-            100% {{ opacity: 1; transform: translateY(0); }}
-        }}
-        .{cls_name} {{
-            animation-name: {anim_name};
-            animation-duration: 480ms;
-            animation-timing-function: cubic-bezier(.2,.6,.2,1);
-            animation-fill-mode: both;
-            will-change: opacity, transform;
-        }}
-        </style>
-        <div class="{cls_name}">
-        """,
-        unsafe_allow_html=True,
-    )
-
-def _close_fade_wrapper():
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
 # ---------------- Page 1: Metal Prices (Commodity) ----------------
 def render_metal_prices_page():
-    _open_fade_wrapper()
-
     st.markdown('<div class="title">Metal Prices Dashboards</div>', unsafe_allow_html=True)
 
     DEFAULT_START = pd.to_datetime("2025-04-01").date()
@@ -182,28 +129,26 @@ def render_metal_prices_page():
     config = load_config()
     sheets: List[Dict] = config.get("sheets", []) if isinstance(config, dict) else config
     (if_not := (not sheets)) and st.info("No published data yet.") or None
-    if if_not:
-        _close_fade_wrapper()
-        st.stop()
+    if if_not: st.stop()
 
     labels = [s.get("label") or s.get("sheet") or s.get("slug") for s in sheets]
     slugs = [s.get("slug") for s in sheets]
 
     sel_label = st.selectbox("Commodity", labels, index=0, key="commodity-select")
-    slug = slugs[labels.index(sel_label)]
 
-    # Fade when commodity changes
-    prev_slug = st.session_state.get("prev_slug_metal")
-    if prev_slug is None:
-        st.session_state["prev_slug_metal"] = slug
-    elif prev_slug != slug:
-        st.session_state["prev_slug_metal"] = slug
-        _bump_anim_seed()
+    # bump animation if commodity changed
+    _last_sel = st.session_state.get("_last_sel")
+    if _last_sel is None:
+        st.session_state["_last_sel"] = sel_label
+    elif sel_label != _last_sel:
+        st.session_state["anim_seed"] = st.session_state.get("anim_seed", 0) + 1
+        st.session_state["_last_sel"] = sel_label
+
+    slug = slugs[labels.index(sel_label)]
 
     df = load_sheet(slug)
     if df.empty:
         st.warning("No data for this commodity.")
-        _close_fade_wrapper()
         st.stop()
 
     min_d = pd.to_datetime(df["Month"].min()).date()
@@ -224,9 +169,9 @@ def render_metal_prices_page():
 
     with st.form(key=f"filters-{slug}-{ver}", border=False):
         c1, c2, c3, c4 = st.columns([2.6, 2.6, 0.6, 0.6], gap="small")
-        # DD/MM/YYYY format
-        c1.date_input("From (DD/MM/YYYY)", def_start, key=w_from, format="DD/MM/YYYY")
-        c2.date_input("To (DD/MM/YYYY)", def_end, key=w_to, format="DD/MM/YYYY")
+        # Labels explicit in DD/MM/YYYY (UI clarity)
+        c1.date_input("From (DD/MM/YYYY)", def_start, key=w_from)
+        c2.date_input("To (DD/MM/YYYY)", def_end, key=w_to)
         with c3:
             st.markdown('<div style="height:30px;"></div>', unsafe_allow_html=True)
             search = st.form_submit_button("Search")
@@ -242,18 +187,19 @@ def render_metal_prices_page():
         st.session_state[k_from] = def_start
         st.session_state[k_to] = def_end
         st.session_state[ver_key] = ver + 1
+        # trigger fade on clear
+        st.session_state["anim_seed"] = st.session_state.get("anim_seed", 0) + 1
         st.rerun()
 
     if search:
         start_val = st.session_state[w_from]
         end_val = st.session_state[w_to]
         if start_val > end_val:
-            st.error("From date must be ≤ To date.")
-            _close_fade_wrapper()
-            st.stop()
+            st.error("From date must be ≤ To date."); st.stop()
         st.session_state[k_from] = start_val
         st.session_state[k_to] = end_val
-        _bump_anim_seed()  # <- fade on search, too
+        # trigger fade on search
+        st.session_state["anim_seed"] = st.session_state.get("anim_seed", 0) + 1
 
     start = st.session_state[k_from]
     end = st.session_state[k_to]
@@ -261,9 +207,7 @@ def render_metal_prices_page():
     mask = (df["Month"].dt.date >= start) & (df["Month"].dt.date <= end)
     f = df.loc[mask].copy()
     if f.empty:
-        st.info("No rows in this range.")
-        _close_fade_wrapper()
-        st.stop()
+        st.info("No rows in this range."); st.stop()
 
     # ------- Plot data -------
     f = f.sort_values("Month")
@@ -290,13 +234,16 @@ def render_metal_prices_page():
         "is_forecast": True,
     })
 
-    # Shared X domain (actual + forecast), de-duplicated
-    domain_order = _unique(f["MonthLabel"].tolist() + scrap_fc_df["MonthLabel"].tolist())
+    # Shared X domain (actual + forecast)
+    domain_order = f["MonthLabel"].tolist() + [
+        m for m in scrap_fc_df["MonthLabel"].tolist() if m not in set(f["MonthLabel"])
+    ]
 
-    # Single table then split by flag
+    # Combine and split for layers (ensures bars + line align perfectly)
     f_act = f.copy()
     f_act["is_forecast"] = False
     plot_all = pd.concat([f_act, scrap_fc_df], ignore_index=True)
+
     actual_only = plot_all[plot_all["is_forecast"] == False]
     forecast_only = plot_all[plot_all["is_forecast"] == True]
 
@@ -343,8 +290,7 @@ def render_metal_prices_page():
     )
 
     scrap_chart_key = f"scrap-{slug}-{start.isoformat()}-{end.isoformat()}-{ver}"
-    chart = _tidy((bars_actual + line_actual + line_forecast).properties(height=430, width=1200))\
-        .resolve_scale(x="shared", y="shared")
+    chart = _tidy((bars_actual + line_actual + line_forecast).properties(height=430)).resolve_scale(x="shared", y="shared")
     st.altair_chart(chart, use_container_width=True, key=scrap_chart_key)
 
     # ------- Summary (actuals) -------
@@ -401,13 +347,8 @@ def render_metal_prices_page():
         unsafe_allow_html=True,
     )
 
-    _close_fade_wrapper()
-
-
 # ---------------- Page 2: Billet Prices ----------------
 def render_billet_prices_page():
-    _open_fade_wrapper()
-
     st.markdown('<div class="title">Billet Prices</div>', unsafe_allow_html=True)
 
     BASE_DIR = Path(__file__).parent.resolve()
@@ -441,13 +382,11 @@ def render_billet_prices_page():
         src = _find_billet_file()
         if not src:
             st.error("Billet Excel not found. Put **Billet cost.xlsx** in `data/` or `data/current/` (or next to this file).")
-            _close_fade_wrapper()
             st.stop()
         try:
             xls = pd.ExcelFile(src)
         except Exception as e:
             st.error(f"Could not open {src.name}: {e}. Ensure `openpyxl` is in requirements.txt.")
-            _close_fade_wrapper()
             st.stop()
 
         sheet_name = _resolve_sheet_name(xls, series_label)
@@ -457,12 +396,9 @@ def render_billet_prices_page():
         price_col   = next((c for c in raw.columns if re.search(r"billet.*(per)?.*mt", str(c), re.I)), None)
         if quarter_col is None or price_col is None:
             st.error("Could not detect columns. Need a Quarter column and a 'Billet cost per MT' column.")
-            _close_fade_wrapper()
             st.stop()
 
-        df0 = raw[[quarter_col, price_col]].rename(
-            columns={quarter_col: "Quarter", price_col: "Price"}
-        )
+        df0 = raw[[quarter_col, price_col]].rename(columns={quarter_col: "Quarter", price_col: "Price"})
         df0["Quarter"] = df0["Quarter"].astype(str).str.strip()
 
         def _q_order(qs: str) -> int:
@@ -483,9 +419,7 @@ def render_billet_prices_page():
     series_label = st.selectbox("Select Billet Series", BILLET_SERIES_LABELS, index=0, key="billet-series")
     billet_df_full = _load_billet_df(series_label)
     if billet_df_full.empty:
-        st.info("No billet rows.")
-        _close_fade_wrapper()
-        st.stop()
+        st.info("No billet rows."); st.stop()
 
     quarters     = billet_df_full["QuarterLabel"].tolist()
     q_start_def  = quarters[0]
@@ -524,27 +458,26 @@ def render_billet_prices_page():
         st.session_state[kq_from] = q_start_def
         st.session_state[kq_to]   = q_end_def
         st.session_state[kq_ver]  = ver2 + 1
+        # trigger fade on clear
+        st.session_state["anim_seed"] = st.session_state.get("anim_seed", 0) + 1
         st.rerun()
 
     if btn_go:
         sel_from = st.session_state[wq_from]
         sel_to   = st.session_state[wq_to]
         if quarters.index(sel_from) > quarters.index(sel_to):
-            st.error("From Quarter must be ≤ To Quarter.")
-            _close_fade_wrapper()
-            st.stop()
+            st.error("From Quarter must be ≤ To Quarter."); st.stop()
         st.session_state[kq_from] = sel_from
         st.session_state[kq_to]   = sel_to
-        _bump_anim_seed()  # fade on search
+        # trigger fade on search
+        st.session_state["anim_seed"] = st.session_state.get("anim_seed", 0) + 1
 
     q_from = st.session_state[kq_from]
     q_to   = st.session_state[kq_to]
     i_from = quarters.index(q_from); i_to = quarters.index(q_to)
     billet_df = billet_df_full.iloc[i_from:i_to+1].copy()
     if billet_df.empty:
-        st.info("No rows in this quarter range.")
-        _close_fade_wrapper()
-        st.stop()
+        st.info("No rows in this quarter range."); st.stop()
 
     def _fmt_inr(n: float) -> str:
         try:
@@ -584,8 +517,10 @@ def render_billet_prices_page():
     actual_only = plot_all[plot_all["is_forecast"] == False]
     forecast_only = plot_all[plot_all["is_forecast"] == True]
 
-    # Shared X-domain (actual + forecast), de-duplicated
-    domain_order_q = _unique(billet_df["QuarterLabel"].tolist() + future_quarters)
+    # Shared X-domain (actual + forecast)
+    domain_order_q = billet_df["QuarterLabel"].tolist() + [
+        q for q in future_quarters if q not in set(billet_df["QuarterLabel"])
+    ]
 
     # --- Layers
     bars2 = (
@@ -630,8 +565,7 @@ def render_billet_prices_page():
     )
 
     billet_chart_key = f"billet-{series_label}-{q_from}-{q_to}-{ver2}"
-    chart2 = _tidy((bars2 + line2_actual + line2_forecast).properties(height=430, width=1200))\
-        .resolve_scale(x="shared", y="shared")
+    chart2 = _tidy((bars2 + line2_actual + line2_forecast).properties(height=430)).resolve_scale(x="shared", y="shared")
     st.altair_chart(chart2, use_container_width=True, key=billet_chart_key)
 
     # --- Summary
@@ -667,10 +601,7 @@ def render_billet_prices_page():
         unsafe_allow_html=True,
     )
 
-    _close_fade_wrapper()
-
-
-# ---------------- Sidebar Navigation + fade trigger ----------------
+# ---------------- Sidebar Navigation ----------------
 st.sidebar.markdown('<div class="menu-title">☰ Menu</div>', unsafe_allow_html=True)
 page = st.sidebar.radio(
     "Go to",
@@ -680,15 +611,18 @@ page = st.sidebar.radio(
     label_visibility="collapsed",
 )
 
-# Fade when menu changes
-prev_page = st.session_state.get("prev_page")
-if prev_page is None:
-    st.session_state["prev_page"] = page
-elif prev_page != page:
-    st.session_state["prev_page"] = page
-    _bump_anim_seed()
+# bump animation on page change
+_prev_page = st.session_state.get("_prev_page")
+if _prev_page is None:
+    st.session_state["_prev_page"] = page
+elif page != _prev_page:
+    st.session_state["anim_seed"] = st.session_state.get("anim_seed", 0) + 1
+    st.session_state["_prev_page"] = page
 
+# Wrap the rendered page so each change fades in
+_open_fade_wrapper()
 if page == "Metal Prices":
     render_metal_prices_page()
 else:
     render_billet_prices_page()
+_close_fade_wrapper()
