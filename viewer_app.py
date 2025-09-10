@@ -4,7 +4,6 @@ from html import escape
 from typing import List, Dict
 from pathlib import Path
 import re
-import math
 
 import altair as alt
 import pandas as pd
@@ -49,17 +48,20 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# Small helper to apply consistent anti-clipping config on Altair charts
 def _tidy(chart: alt.Chart) -> alt.Chart:
     return (
         chart
-        .properties(padding={"left": 56, "right": 56, "top": 16, "bottom": 42})
+        # add space around the plot so edges don’t clip
+        .properties(padding={"left": 48, "right": 48, "top": 12, "bottom": 36})
+        # remove hard frame that sometimes clips marks
         .configure_view(strokeWidth=0)
+        # improve axis spacing so labels/ticks don’t overlap edges
         .configure_axis(
             labelPadding=8,
             titlePadding=10,
             labelFontSize=12,
             titleFontSize=12,
-            grid=True,
         )
         .configure_axisX(labelAngle=0)
     )
@@ -144,7 +146,7 @@ f = df.loc[mask].copy()
 if f.empty:
     st.info("No rows in this range."); st.stop()
 
-# ------- Plot data (keep original look) -------
+# ------- Plot data -------
 f = f.sort_values("Month")
 f["MonthLabel"] = pd.to_datetime(f["Month"]).dt.strftime("%b %y").str.upper()
 
@@ -195,49 +197,32 @@ scrap_fc_df = pd.DataFrame({
     "is_forecast": True,
 })
 
-# ===== FIX 1: ensure one bar per month (no accidental stacking) =====
-bars_df = f.drop_duplicates(subset=["MonthLabel"], keep="last").copy()
+f_act = f.copy()
+f_act["is_forecast"] = False
+plot_scrap = pd.concat([f_act, scrap_fc_df], ignore_index=True)
 
-# ===== FIX 2: shared X domain so line never drifts =====
-domain_order = bars_df["MonthLabel"].tolist() + [
-    m for m in scrap_fc_df["MonthLabel"].tolist() if m not in set(bars_df["MonthLabel"])
-]
-
-# ===== FIX 3: robust Y domain + explicit baseline (y2) so bars always render =====
-min_val = float(bars_df["Price"].min())
-max_val = float(bars_df["Price"].max())
-span = max(1e-9, max_val - min_val)
-
-# Padding that works for constant series too
-pad = max(0.2 * span, 0.05 * max_val, 0.5)  # at least 0.5 unit
-y_min = min_val - pad
-y_max = max_val + pad
-
-# ------- Layers -------
+# ------- Chart (anti-clipping) -------
 bars_actual = (
-    alt.Chart(bars_df)
-    .mark_bar(size=_bar_size(len(bars_df)))
+    alt.Chart(plot_scrap[plot_scrap["is_forecast"] == False])
+    .mark_bar(size=_bar_size(len(f)))
     .encode(
         x=alt.X(
             "MonthLabel:N",
             title="Months",
-            sort=domain_order,
+            sort=None,
             axis=alt.Axis(labelAngle=0),
-            scale=alt.Scale(domain=domain_order, paddingOuter=0.35, paddingInner=0.45),
+            # add outer padding so first/last bars are not flush with the frame
+            scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45),
         ),
         y=alt.Y(
             "Price:Q",
             title="Price",
-            stack=None,
-            scale=alt.Scale(domain=(y_min, y_max), nice=False),
+            scale=alt.Scale(zero=False, nice=True),  # leave headroom
         ),
-        y2=alt.Y2(value=y_min),  # explicit baseline INSIDE the domain
         tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
                  alt.Tooltip("PriceTT:N", title="Price")],
     )
 )
-
-plot_scrap = pd.concat([f.assign(is_forecast=False), scrap_fc_df], ignore_index=True)
 
 line_all = (
     alt.Chart(plot_scrap)
@@ -245,10 +230,10 @@ line_all = (
     .encode(
         x=alt.X(
             "MonthLabel:N",
-            sort=domain_order,
-            scale=alt.Scale(domain=domain_order, paddingOuter=0.35, paddingInner=0.45),
+            sort=None,
+            scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45),
         ),
-        y=alt.Y("Price:Q", scale=alt.Scale(domain=(y_min, y_max), nice=False)),
+        y=alt.Y("Price:Q", scale=alt.Scale(zero=False, nice=True)),
         detail="is_forecast:N",
         strokeDash=alt.condition(alt.datum.is_forecast, alt.value([4,3]), alt.value([1,0])),
         tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
@@ -256,7 +241,7 @@ line_all = (
     )
 )
 
-chart = _tidy((bars_actual + line_all).properties(height=430)).resolve_scale(x="shared", y="shared")
+chart = _tidy((bars_actual + line_all).properties(height=430))
 st.altair_chart(chart, use_container_width=True)
 
 # ------- Summary (actuals) -------
@@ -292,13 +277,14 @@ avg_price = float(f["Price"].mean())
 rng = hi_price - lo_price
 n_months = len(f)
 
-st.markdown(f"""
+summary_html = f"""
 <div class="summary-box">
   <div><b>{start_mon}</b> to <b>{end_mon}</b>: price moved from <b>{_fmt_money(start_price)}</b> to <b>{_fmt_money(end_price)}</b> ({arrow} {chg_abs:+.2f}, {chg_pct:+.2f}%).</div>
   <div>Period high was <b>{_fmt_money(hi_price)}</b> in <b>{hi_mon}</b>; low was <b>{_fmt_money(lo_price)}</b> in <b>{lo_mon}</b> (range {_fmt_money(rng)}).</div>
   <div>Across <b>{n_months}</b> months, the average price was <b>{_fmt_money(avg_price)}</b>. These details auto-update with your date filters.</div>
 </div>
-""", unsafe_allow_html=True)
+"""
+st.markdown(summary_html, unsafe_allow_html=True)
 
 # ------- Forecast summary (Scrap) -------
 scrap_fc_pairs = [f"{d.strftime('%b %Y')}: {_fmt_money(v)}" for d, v in zip(future_months, scrap_fc)]
@@ -313,7 +299,7 @@ st.markdown(
 )
 
 # ================================
-# BILLET PRICES DASHBOARD (₹ tooltip + labels + forecast)
+# BILLET PRICES DASHBOARD (with ₹ tooltip + forecast)
 # ================================
 st.divider()
 st.markdown('<div class="title">Billet Prices</div>', unsafe_allow_html=True)
@@ -477,52 +463,38 @@ b_act = billet_df.copy()
 b_act["is_forecast"] = False
 billet_plot = pd.concat([b_act, billet_fc_df], ignore_index=True)
 
-# --- y-domain with headroom so labels never clip
-max_actual = float(b_act["Price"].max())
-headroom = max(3000, max_actual * 0.15)  # 15% or at least ₹3k
-domain_top = math.ceil((max_actual + headroom) / 5000) * 5000
-
-# --- Bars (blue)
+# --- Chart (anti-clipping)
 bars2 = (
-    alt.Chart(b_act)
-    .mark_bar(size=40, color="#1f77b4")
+    alt.Chart(billet_plot[billet_plot["is_forecast"] == False])
+    .mark_bar(size=28)
     .encode(
-        x=alt.X("QuarterLabel:N", title="Quarter", sort=None,
-                axis=alt.Axis(labelAngle=0),
-                scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45)),
-        y=alt.Y("Price:Q", title="Price in ₹",
-                scale=alt.Scale(domain=(0, domain_top), nice=False, zero=True),
-                axis=alt.Axis(labelExpr="'₹' + format(datum.value, ',d')")),
+        x=alt.X(
+            "QuarterLabel:N",
+            title="Quarter",
+            sort=None,
+            axis=alt.Axis(labelAngle=0),
+            scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45),
+        ),
+        y=alt.Y(
+            "Price:Q",
+            title="Billet cost per MT",
+            scale=alt.Scale(zero=False, nice=True),
+        ),
         tooltip=[alt.Tooltip("QuarterLabel:N", title="Quarter"),
                  alt.Tooltip("PriceTT:N",      title="Price")],
     )
 )
 
-# --- Value labels (smaller size, same position, halo for clarity)
-labels2_bg = (
-    alt.Chart(b_act)
-    .mark_text(dy=-16, fontSize=12, fontWeight="bold",
-               stroke="white", strokeWidth=4, color="white")
-    .encode(x=alt.X("QuarterLabel:N", sort=None),
-            y=alt.Y("Price:Q"),
-            text="PriceTT:N")
-)
-labels2_fg = (
-    alt.Chart(b_act)
-    .mark_text(dy=-16, fontSize=12, fontWeight="bold", color="black")
-    .encode(x=alt.X("QuarterLabel:N", sort=None),
-            y=alt.Y("Price:Q"),
-            text="PriceTT:N")
-)
-
-# --- Line (solid actual, dotted forecast)
 line2 = (
     alt.Chart(billet_plot)
     .mark_line(point=True)
     .encode(
-        x=alt.X("QuarterLabel:N", sort=None,
-                scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45)),
-        y=alt.Y("Price:Q", scale=alt.Scale(domain=(0, domain_top), nice=False, zero=True)),
+        x=alt.X(
+            "QuarterLabel:N",
+            sort=None,
+            scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45),
+        ),
+        y=alt.Y("Price:Q", scale=alt.Scale(zero=False, nice=True)),
         detail="is_forecast:N",
         strokeDash=alt.condition(alt.datum.is_forecast, alt.value([4,3]), alt.value([1,0])),
         tooltip=[alt.Tooltip("QuarterLabel:N", title="Quarter"),
@@ -530,9 +502,10 @@ line2 = (
     )
 )
 
-chart2 = _tidy((bars2 + labels2_bg + labels2_fg + line2).properties(height=430, title=series_label))
+chart2 = _tidy((bars2 + line2).properties(height=430))
 st.altair_chart(chart2, use_container_width=True)
 
+# --- Summary (actuals)
 def _fmt_int(n: float) -> str:
     try:
         return f"{float(n):,.0f}"
@@ -554,6 +527,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
+# --- Forecast summary (Billet)
 billet_fc_pairs = [f"{lbl}: {_fmt_inr(val)}" for lbl, val in zip(future_quarters, billet_fc)]
 st.markdown(
     f"""
