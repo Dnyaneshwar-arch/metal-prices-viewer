@@ -144,6 +144,7 @@ f = df.loc[mask].copy()
 if f.empty:
     st.info("No rows in this range."); st.stop()
 
+# ------- Plot data -------
 f = f.sort_values("Month")
 f["MonthLabel"] = pd.to_datetime(f["Month"]).dt.strftime("%b %y").str.upper()
 
@@ -161,6 +162,7 @@ def _fmt_tooltip(v):
 
 f["PriceTT"] = f["Price"].apply(_fmt_tooltip)
 
+# === Forecast helper ===
 def _forecast_series(y: pd.Series, periods: int, seasonal_periods: int) -> pd.Series:
     if len(y) < 3:
         return pd.Series([float(y.iloc[-1])] * periods, index=range(periods))
@@ -181,6 +183,7 @@ def _forecast_series(y: pd.Series, periods: int, seasonal_periods: int) -> pd.Se
             pass
     return pd.Series([float(y.iloc[-1])] * periods)
 
+# Build future month labels (3-month horizon)
 last_month = pd.to_datetime(f["Month"].max())
 future_months = pd.date_range(last_month + pd.offsets.MonthBegin(1), periods=3, freq="MS")
 scrap_fc = _forecast_series(f["Price"].reset_index(drop=True), periods=3, seasonal_periods=12)
@@ -196,12 +199,21 @@ f_act = f.copy()
 f_act["is_forecast"] = False
 plot_scrap = pd.concat([f_act, scrap_fc_df], ignore_index=True)
 
+# --- NEW: lock a single shared x-domain across bars + line to avoid drift
+domain_order = list(dict.fromkeys(plot_scrap["MonthLabel"].tolist()))
+
+# ------- Chart (anti-clipping) -------
 bars_actual = (
     alt.Chart(plot_scrap[plot_scrap["is_forecast"] == False])
     .mark_bar(size=_bar_size(len(f)))
     .encode(
-        x=alt.X("MonthLabel:N", title="Months", sort=None, axis=alt.Axis(labelAngle=0),
-                scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45)),
+        x=alt.X(
+            "MonthLabel:N",
+            title="Months",
+            sort=None,
+            axis=alt.Axis(labelAngle=0),
+            scale=alt.Scale(domain=domain_order, paddingOuter=0.35, paddingInner=0.45),
+        ),
         y=alt.Y("Price:Q", title="Price", scale=alt.Scale(zero=False, nice=True)),
         tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
                  alt.Tooltip("PriceTT:N", title="Price")],
@@ -212,7 +224,11 @@ line_all = (
     alt.Chart(plot_scrap)
     .mark_line(point=True)
     .encode(
-        x=alt.X("MonthLabel:N", sort=None, scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45)),
+        x=alt.X(
+            "MonthLabel:N",
+            sort=None,
+            scale=alt.Scale(domain=domain_order, paddingOuter=0.35, paddingInner=0.45),
+        ),
         y=alt.Y("Price:Q", scale=alt.Scale(zero=False, nice=True)),
         detail="is_forecast:N",
         strokeDash=alt.condition(alt.datum.is_forecast, alt.value([4,3]), alt.value([1,0])),
@@ -221,9 +237,10 @@ line_all = (
     )
 )
 
-chart = _tidy((bars_actual + line_all).properties(height=430))
+chart = _tidy((bars_actual + line_all).properties(height=430)).resolve_scale(x="shared", y="shared")
 st.altair_chart(chart, use_container_width=True)
 
+# ------- Summary (actuals) -------
 def _fmt_money(x: float) -> str:
     try:
         return f"${x:,.2f}"
@@ -264,6 +281,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
+# ------- Forecast summary (Scrap) -------
 scrap_fc_pairs = [f"{d.strftime('%b %Y')}: {_fmt_money(v)}" for d, v in zip(future_months, scrap_fc)]
 st.markdown(
     f"""
@@ -276,7 +294,7 @@ st.markdown(
 )
 
 # ================================
-# BILLET PRICES DASHBOARD (labels smaller)
+# BILLET PRICES DASHBOARD (labels smaller, unchanged)
 # ================================
 st.divider()
 st.markdown('<div class="title">Billet Prices</div>', unsafe_allow_html=True)
@@ -441,7 +459,7 @@ billet_plot = pd.concat([b_act, billet_fc_df], ignore_index=True)
 
 # --- y-domain with headroom so labels never clip
 max_actual = float(b_act["Price"].max())
-headroom = max(3000, max_actual * 0.15)  # 15% or at least ₹3k
+headroom = max(3000, max_actual * 0.15)
 domain_top = math.ceil((max_actual + headroom) / 5000) * 5000
 
 # --- Bars (blue)
@@ -460,33 +478,30 @@ bars2 = (
     )
 )
 
-# --- Value labels (smaller size, same position, halo for clarity)
+# --- Value labels (smaller, same position, halo)
 labels2_bg = (
     alt.Chart(b_act)
     .mark_text(dy=-16, fontSize=12, fontWeight="bold",
                stroke="white", strokeWidth=4, color="white")
-    .encode(
-        x=alt.X("QuarterLabel:N", sort=None),
-        y=alt.Y("Price:Q"),
-        text="PriceTT:N",
-    )
+    .encode(x=alt.X("QuarterLabel:N", sort=None),
+            y=alt.Y("Price:Q"),
+            text="PriceTT:N")
 )
 labels2_fg = (
     alt.Chart(b_act)
     .mark_text(dy=-16, fontSize=12, fontWeight="bold", color="black")
-    .encode(
-        x=alt.X("QuarterLabel:N", sort=None),
-        y=alt.Y("Price:Q"),
-        text="PriceTT:N",
-    )
+    .encode(x=alt.X("QuarterLabel:N", sort=None),
+            y=alt.Y("Price:Q"),
+            text="PriceTT:N")
 )
 
-# --- Line (solid for actual, dotted for forecast)
+# --- Line (solid actual, dotted forecast)
 line2 = (
     alt.Chart(billet_plot)
     .mark_line(point=True)
     .encode(
-        x=alt.X("QuarterLabel:N", sort=None, scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45)),
+        x=alt.X("QuarterLabel:N", sort=None,
+                scale=alt.Scale(paddingOuter=0.35, paddingInner=0.45)),
         y=alt.Y("Price:Q", scale=alt.Scale(domain=(0, domain_top), nice=False, zero=True)),
         detail="is_forecast:N",
         strokeDash=alt.condition(alt.datum.is_forecast, alt.value([4,3]), alt.value([1,0])),
