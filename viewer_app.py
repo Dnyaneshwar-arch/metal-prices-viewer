@@ -276,7 +276,7 @@ st.markdown(
 )
 
 # ================================
-# BILLET PRICES DASHBOARD (updated labels visibility)
+# BILLET PRICES DASHBOARD (labels smaller)
 # ================================
 st.divider()
 st.markdown('<div class="title">Billet Prices</div>', unsafe_allow_html=True)
@@ -439,7 +439,7 @@ b_act = billet_df.copy()
 b_act["is_forecast"] = False
 billet_plot = pd.concat([b_act, billet_fc_df], ignore_index=True)
 
-# --- More headroom so labels never clip
+# --- y-domain with headroom so labels never clip
 max_actual = float(b_act["Price"].max())
 headroom = max(3000, max_actual * 0.15)  # 15% or at least ₹3k
 domain_top = math.ceil((max_actual + headroom) / 5000) * 5000
@@ -460,20 +460,25 @@ bars2 = (
     )
 )
 
-# --- UPDATED: crisp value labels (white halo + bold black)
+# --- Value labels (smaller size, same position, halo for clarity)
 labels2_bg = (
     alt.Chart(b_act)
-    .mark_text(dy=-16, fontSize=14, fontWeight="bold", stroke="white", strokeWidth=4, color="white")
-    .encode(x=alt.X("QuarterLabel:N", sort=None),
-            y=alt.Y("Price:Q"),
-            text="PriceTT:N")
+    .mark_text(dy=-16, fontSize=12, fontWeight="bold",
+               stroke="white", strokeWidth=4, color="white")
+    .encode(
+        x=alt.X("QuarterLabel:N", sort=None),
+        y=alt.Y("Price:Q"),
+        text="PriceTT:N",
+    )
 )
 labels2_fg = (
     alt.Chart(b_act)
-    .mark_text(dy=-16, fontSize=14, fontWeight="bold", color="black")
-    .encode(x=alt.X("QuarterLabel:N", sort=None),
-            y=alt.Y("Price:Q"),
-            text="PriceTT:N")
+    .mark_text(dy=-16, fontSize=12, fontWeight="bold", color="black")
+    .encode(
+        x=alt.X("QuarterLabel:N", sort=None),
+        y=alt.Y("Price:Q"),
+        text="PriceTT:N",
+    )
 )
 
 # --- Line (solid for actual, dotted for forecast)
