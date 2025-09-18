@@ -247,10 +247,10 @@ def render_metal_prices_page():
     actual_only = plot_all[plot_all["is_forecast"] == False]
     forecast_only = plot_all[plot_all["is_forecast"] == True]
 
-    # ------- Layers (z-order pinned: bars < forecast line < actual line) -------
+    # ------- Layers (explicit order: bars < forecast < actual) -------
     bars_actual = (
         alt.Chart(actual_only)
-        .mark_bar(size=_bar_size(len(actual_only)), zindex=0)
+        .mark_bar(size=_bar_size(len(actual_only)))
         .encode(
             x=alt.X(
                 "MonthLabel:N",
@@ -265,9 +265,9 @@ def render_metal_prices_page():
         )
     )
 
-    line_actual = (
-        alt.Chart(actual_only)
-        .mark_line(point=True, zindex=3)
+    line_forecast = (
+        alt.Chart(forecast_only)
+        .mark_line(point=True, strokeDash=[4, 3])
         .encode(
             x=alt.X("MonthLabel:N", sort=domain_order,
                     scale=alt.Scale(domain=domain_order, paddingOuter=0.35, paddingInner=0.45)),
@@ -277,9 +277,9 @@ def render_metal_prices_page():
         )
     )
 
-    line_forecast = (
-        alt.Chart(forecast_only)
-        .mark_line(point=True, strokeDash=[4, 3], zindex=2)
+    line_actual = (
+        alt.Chart(actual_only)
+        .mark_line(point=True)
         .encode(
             x=alt.X("MonthLabel:N", sort=domain_order,
                     scale=alt.Scale(domain=domain_order, paddingOuter=0.35, paddingInner=0.45)),
@@ -290,7 +290,7 @@ def render_metal_prices_page():
     )
 
     scrap_chart_key = f"scrap-{slug}-{start.isoformat()}-{end.isoformat()}-{ver}"
-    chart = _tidy((bars_actual + line_actual + line_forecast).properties(height=430)).resolve_scale(x="shared", y="shared")
+    chart = _tidy((bars_actual + line_forecast + line_actual).properties(height=430)).resolve_scale(x="shared", y="shared")
     st.altair_chart(chart, use_container_width=True, key=scrap_chart_key)
 
     # ------- Summary (actuals) -------
@@ -524,10 +524,10 @@ def render_billet_prices_page():
         q for q in future_quarters if q not in set(billet_df["QuarterLabel"])
     ]
 
-    # --- Layers (z-order pinned: bars < forecast line < actual line)
+    # --- Layers (explicit order: bars < forecast < actual)
     bars2 = (
         alt.Chart(actual_only)
-        .mark_bar(size=28, zindex=0)
+        .mark_bar(size=28)
         .encode(
             x=alt.X(
                 "QuarterLabel:N",
@@ -542,9 +542,9 @@ def render_billet_prices_page():
         )
     )
 
-    line2_actual = (
-        alt.Chart(actual_only)
-        .mark_line(point=True, zindex=3)
+    line2_forecast = (
+        alt.Chart(forecast_only)
+        .mark_line(point=True, strokeDash=[4, 3])
         .encode(
             x=alt.X("QuarterLabel:N", sort=domain_order_q,
                     scale=alt.Scale(domain=domain_order_q, paddingOuter=0.35, paddingInner=0.45)),
@@ -554,9 +554,9 @@ def render_billet_prices_page():
         )
     )
 
-    line2_forecast = (
-        alt.Chart(forecast_only)
-        .mark_line(point=True, strokeDash=[4, 3], zindex=2)
+    line2_actual = (
+        alt.Chart(actual_only)
+        .mark_line(point=True)
         .encode(
             x=alt.X("QuarterLabel:N", sort=domain_order_q,
                     scale=alt.Scale(domain=domain_order_q, paddingOuter=0.35, paddingInner=0.45)),
@@ -567,7 +567,7 @@ def render_billet_prices_page():
     )
 
     billet_chart_key = f"billet-{series_label}-{q_from}-{q_to}-{ver2}"
-    chart2 = _tidy((bars2 + line2_actual + line2_forecast).properties(height=430)).resolve_scale(x="shared", y="shared")
+    chart2 = _tidy((bars2 + line2_forecast + line2_actual).properties(height=430)).resolve_scale(x="shared", y="shared")
     st.altair_chart(chart2, use_container_width=True, key=billet_chart_key)
 
     # --- Summary
