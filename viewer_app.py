@@ -58,7 +58,12 @@ st.markdown(
 
 # ---------- Fade animation helpers ----------
 def _open_fade_wrapper():
-    """Inject a per-render CSS animation and open a wrapper <div>."""
+    """Inject a per-render CSS animation and open a wrapper <div>.
+
+    NOTE: We animate *opacity only* (no transforms) to avoid Vega-Lite
+    measuring the container while it's mid-transform, which could delay
+    initial chart painting until the first hover.
+    """
     seed = st.session_state.get("anim_seed", 0)
     st.session_state["__fade_seed"] = seed
     anim = f"fadeIn_{seed}"
@@ -67,12 +72,12 @@ def _open_fade_wrapper():
         f"""
         <style id="fade-style-{seed}">
           @keyframes {anim} {{
-            0%   {{ opacity: 0; transform: translateY(10px); }}
-            100% {{ opacity: 1; transform: translateY(0); }}
+            0%   {{ opacity: 0; }}
+            100% {{ opacity: 1; }}
           }}
           .{cls} {{
             animation: {anim} 480ms cubic-bezier(.2,.6,.2,1) both;
-            will-change: opacity, transform;
+            will-change: opacity;
           }}
         </style>
         <div class="{cls}">
