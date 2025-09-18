@@ -247,10 +247,10 @@ def render_metal_prices_page():
     actual_only = plot_all[plot_all["is_forecast"] == False]
     forecast_only = plot_all[plot_all["is_forecast"] == True]
 
-    # ------- Layers -------
+    # ------- Layers (z-order pinned: bars < forecast line < actual line) -------
     bars_actual = (
         alt.Chart(actual_only)
-        .mark_bar(size=_bar_size(len(actual_only)))
+        .mark_bar(size=_bar_size(len(actual_only)), zindex=0)
         .encode(
             x=alt.X(
                 "MonthLabel:N",
@@ -267,7 +267,7 @@ def render_metal_prices_page():
 
     line_actual = (
         alt.Chart(actual_only)
-        .mark_line(point=True)
+        .mark_line(point=True, zindex=3)
         .encode(
             x=alt.X("MonthLabel:N", sort=domain_order,
                     scale=alt.Scale(domain=domain_order, paddingOuter=0.35, paddingInner=0.45)),
@@ -279,7 +279,7 @@ def render_metal_prices_page():
 
     line_forecast = (
         alt.Chart(forecast_only)
-        .mark_line(point=True, strokeDash=[4, 3])
+        .mark_line(point=True, strokeDash=[4, 3], zindex=2)
         .encode(
             x=alt.X("MonthLabel:N", sort=domain_order,
                     scale=alt.Scale(domain=domain_order, paddingOuter=0.35, paddingInner=0.45)),
@@ -524,10 +524,10 @@ def render_billet_prices_page():
         q for q in future_quarters if q not in set(billet_df["QuarterLabel"])
     ]
 
-    # --- Layers
+    # --- Layers (z-order pinned: bars < forecast line < actual line)
     bars2 = (
         alt.Chart(actual_only)
-        .mark_bar(size=28)
+        .mark_bar(size=28, zindex=0)
         .encode(
             x=alt.X(
                 "QuarterLabel:N",
@@ -544,7 +544,7 @@ def render_billet_prices_page():
 
     line2_actual = (
         alt.Chart(actual_only)
-        .mark_line(point=True)
+        .mark_line(point=True, zindex=3)
         .encode(
             x=alt.X("QuarterLabel:N", sort=domain_order_q,
                     scale=alt.Scale(domain=domain_order_q, paddingOuter=0.35, paddingInner=0.45)),
@@ -556,7 +556,7 @@ def render_billet_prices_page():
 
     line2_forecast = (
         alt.Chart(forecast_only)
-        .mark_line(point=True, strokeDash=[4, 3])
+        .mark_line(point=True, strokeDash=[4, 3], zindex=2)
         .encode(
             x=alt.X("QuarterLabel:N", sort=domain_order_q,
                     scale=alt.Scale(domain=domain_order_q, paddingOuter=0.35, paddingInner=0.45)),
