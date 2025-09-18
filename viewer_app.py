@@ -58,11 +58,10 @@ st.markdown(
 
 # ---------- Fade animation helpers ----------
 def _open_fade_wrapper():
-    """Inject a per-render CSS animation and open a wrapper <div>.
+    """Open a wrapper <div> with a per-render fade animation.
 
-    NOTE: We animate *opacity only* (no transforms) to avoid Vega-Lite
-    measuring the container while it's mid-transform, which could delay
-    initial chart painting until the first hover.
+    IMPORTANT: We explicitly *exclude charts* inside this wrapper from
+    any animation, so Vega-Lite measures and paints immediately.
     """
     seed = st.session_state.get("anim_seed", 0)
     st.session_state["__fade_seed"] = seed
@@ -78,6 +77,16 @@ def _open_fade_wrapper():
           .{cls} {{
             animation: {anim} 480ms cubic-bezier(.2,.6,.2,1) both;
             will-change: opacity;
+          }}
+
+          /* --- Critical fix: do NOT animate Altair/Vega containers --- */
+          .{cls} [data-testid="stVegaLiteChart"],
+          .{cls} [data-testid="stAltairChart"],
+          .{cls} .vega-embed,
+          .{cls} canvas {{
+            animation: none !important;
+            opacity: 1 !important;
+            transform: none !important;
           }}
         </style>
         <div class="{cls}">
