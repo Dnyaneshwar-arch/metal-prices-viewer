@@ -381,7 +381,7 @@ def render_billet_prices_page():
         st.caption(f"Source: {src.name} • sheet: {sheet_name}")
         return df0
 
-    # --- Billet series select with rerender enforcement ---
+    # Billet series select with rerender enforcement (and fresh mount)
     series_label = st.selectbox("Select Billet Series", BILLET_SERIES_LABELS, index=0, key="billet-series")
     _last_billet = st.session_state.get("_last_billet_series")
     if _last_billet is None:
@@ -461,16 +461,13 @@ def render_billet_prices_page():
     billet_fc = _forecast_series(billet_df["Price"].reset_index(drop=True), periods=2, seasonal_periods=4)
 
     def _next_quarters(last_q_label: str, k: int = 2) -> list[str]:
-        # last_q_label like "Q1 2025"
         m = re.search(r"Q(\d)\s+(\d{4})", last_q_label)
-        if not m:
-            return []
+        if not m: return []
         q = int(m.group(1)); y = int(m.group(2))
         out = []
         for _ in range(k):
             q = 1 if q == 4 else q + 1
-            if q == 1:
-                y += 1
+            if q == 1: y += 1
             out.append(f"Q{q} {y}")
         return out
 
@@ -488,7 +485,7 @@ def render_billet_prices_page():
     plot_all = pd.concat([b_act, billet_fc_df], ignore_index=True)
 
     actual_only = plot_all[plot_all["is_forecast"] == False]
-    forecast_only = plot_all[plot_all["is_forecast"] == True]
+    forecast_only = plot_all[plot_all]["is_forecast"] == True
 
     domain_order_q = billet_df["QuarterLabel"].tolist() + [q for q in future_quarters if q not in set(billet_df["QuarterLabel"])]
 
@@ -535,10 +532,13 @@ def render_billet_prices_page():
 
     global_ver = st.session_state.get("chart_ver_global", 0)
     billet_chart_key = f"billet-{series_label}-{q_from}-{q_to}-{ver2}-{global_ver}"
-    chart2 = _tidy((bars2 + line2_forecast + line2_actual).properties(height=430)).resolve_scale(x="shared", y="shared")
-    st.altair_chart(chart2, use_container_width=True, key=billet_chart_key)
 
-    # -------- Billet Summary (now implemented) --------
+    # Fresh mount to avoid stale Vega view (fixes “updates only on hover”)
+    placeholder = st.empty()
+    chart2 = _tidy((bars2 + line2_forecast + line2_actual).properties(height=430)).resolve_scale(x="shared", y="shared")
+    placeholder.altair_chart(chart2, use_container_width=True, key=billet_chart_key)
+
+    # -------- Billet Summary --------
     def _fmt_inr_money(x: float) -> str:
         try:
             return f"₹{x:,.0f}"
