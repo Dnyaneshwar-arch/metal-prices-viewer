@@ -108,12 +108,11 @@ def render_metal_prices_page():
 
     sel_label = st.selectbox("Commodity", labels, index=0, key="commodity-select")
 
-    # --- Force a clean redraw when commodity changes (fixes “updates only on hover”) ---
+    # Force a clean redraw when commodity changes
     _last_sel = st.session_state.get("_last_sel")
     if _last_sel is None:
         st.session_state["_last_sel"] = sel_label
     elif sel_label != _last_sel:
-        # bump a global render version and remember the new selection, then rerun once
         st.session_state["_last_sel"] = sel_label
         st.session_state["chart_ver_global"] = st.session_state.get("chart_ver_global", 0) + 1
         st.rerun()
@@ -254,7 +253,6 @@ def render_metal_prices_page():
         )
     )
 
-    # include a global render version to force a full widget remount after commodity change
     global_ver = st.session_state.get("chart_ver_global", 0)
     scrap_chart_key = f"scrap-{slug}-{start.isoformat()}-{end.isoformat()}-{ver}-{global_ver}"
 
@@ -383,7 +381,16 @@ def render_billet_prices_page():
         st.caption(f"Source: {src.name} • sheet: {sheet_name}")
         return df0
 
+    # --- Billet series select with rerender enforcement ---
     series_label = st.selectbox("Select Billet Series", BILLET_SERIES_LABELS, index=0, key="billet-series")
+    _last_billet = st.session_state.get("_last_billet_series")
+    if _last_billet is None:
+        st.session_state["_last_billet_series"] = series_label
+    elif series_label != _last_billet:
+        st.session_state["_last_billet_series"] = series_label
+        st.session_state["chart_ver_global"] = st.session_state.get("chart_ver_global", 0) + 1
+        st.rerun()
+
     billet_df_full = _load_billet_df(series_label)
     if billet_df_full.empty:
         st.info("No billet rows."); st.stop()
@@ -424,7 +431,7 @@ def render_billet_prices_page():
     if btn_clear:
         st.session_state[kq_from] = q_start_def
         st.session_state[kq_to]   = q_end_def
-        st.session_state[kq_ver] = ver2 + 1
+        st.session_state[kq_ver]  = ver2 + 1
         st.rerun()
 
     if btn_go:
@@ -450,9 +457,24 @@ def render_billet_prices_page():
 
     billet_df["PriceTT"] = billet_df["Price"].apply(_fmt_inr)
 
-    future_quarters = []
+    # Forecast next 2 quarters
     billet_fc = _forecast_series(billet_df["Price"].reset_index(drop=True), periods=2, seasonal_periods=4)
-    future_quarters = [f"Q{((int(q_label.split()[0][1]) % 4) + 1)} {int(q_label.split()[1]) + (1 if int(q_label.split()[0][1]) == 4 else 0)}" for q_label in [billet_df["QuarterLabel"].iloc[-1]] * 2]  # or your existing method
+
+    def _next_quarters(last_q_label: str, k: int = 2) -> list[str]:
+        # last_q_label like "Q1 2025"
+        m = re.search(r"Q(\d)\s+(\d{4})", last_q_label)
+        if not m:
+            return []
+        q = int(m.group(1)); y = int(m.group(2))
+        out = []
+        for _ in range(k):
+            q = 1 if q == 4 else q + 1
+            if q == 1:
+                y += 1
+            out.append(f"Q{q} {y}")
+        return out
+
+    future_quarters = _next_quarters(billet_df["QuarterLabel"].iloc[-1], 2)
 
     billet_fc_df = pd.DataFrame({
         "QuarterLabel": future_quarters,
@@ -472,7 +494,7 @@ def render_billet_prices_page():
 
     bars2 = (
         alt.Chart(actual_only)
-        .mark_bar(size=28)
+        .mark_bar(size=_bar_size(len(actual_only)))
         .encode(
             x=alt.X(
                 "QuarterLabel:N",
@@ -516,8 +538,52 @@ def render_billet_prices_page():
     chart2 = _tidy((bars2 + line2_forecast + line2_actual).properties(height=430)).resolve_scale(x="shared", y="shared")
     st.altair_chart(chart2, use_container_width=True, key=billet_chart_key)
 
-    # Summary, same as before
-    # …
+    # -------- Billet Summary (now implemented) --------
+    def _fmt_inr_money(x: float) -> str:
+        try:
+            return f"₹{x:,.0f}"
+        except Exception:
+            return f"₹{x}"
+
+    first_row = billet_df.iloc[0]
+    last_row = billet_df.iloc[-1]
+    start_price = float(first_row["Price"])
+    end_price = float(last_row["Price"])
+    start_q = first_row["QuarterLabel"]
+    end_q = last_row["QuarterLabel"]
+
+    chg_abs = end_price - start_price
+    chg_pct = (chg_abs / start_price * 100.0) if start_price not in (0, None) else 0.0
+    arrow = "↑" if chg_abs > 0 else ("↓" if chg_abs < 0 else "→")
+
+    hi_idx = billet_df["Price"].idxmax()
+    lo_idx = billet_df["Price"].idxmin()
+    hi_price, hi_q = float(billet_df.loc[hi_idx, "Price"]), billet_df.loc[hi_idx, "QuarterLabel"]
+    lo_price, lo_q = float(billet_df.loc[lo_idx, "Price"]), billet_df.loc[lo_idx, "QuarterLabel"]
+
+    avg_price = float(billet_df["Price"].mean())
+    rng = hi_price - lo_price
+    n_rows = len(billet_df)
+
+    summary_html_b = f"""
+    <div class="summary-box">
+      <div><b>{start_q}</b> to <b>{end_q}</b>: price moved from <b>{_fmt_inr_money(start_price)}</b> to <b>{_fmt_inr_money(end_price)}</b> ({arrow} {chg_abs:+.0f}, {chg_pct:+.2f}%).</div>
+      <div>Period high was <b>{_fmt_inr_money(hi_price)}</b> in <b>{hi_q}</b>; low was <b>{_fmt_inr_money(lo_price)}</b> in <b>{lo_q}</b> (range {_fmt_inr_money(rng)}).</div>
+      <div>Across <b>{n_rows}</b> quarters, the average price was <b>{_fmt_inr_money(avg_price)}</b>. These details auto-update with your quarter filters.</div>
+    </div>
+    """
+    st.markdown(summary_html_b, unsafe_allow_html=True)
+
+    billet_fc_pairs = [f"{q}: {_fmt_inr_money(v)}" for q, v in zip(future_quarters, billet_fc)]
+    st.markdown(
+        f"""
+    <div class="summary-box">
+      <div><b>Forecast (next 2 quarters)</b> — {', '.join(billet_fc_pairs)}.</div>
+      <div>Method: Holt–Winters (additive trend{', seasonal (4)' if _HAS_STATSMODELS and len(billet_df)>=8 else ''}); fallback = last value.</div>
+    </div>
+    """,
+        unsafe_allow_html=True,
+    )
 
 # ---------------- Sidebar Navigation ----------------
 st.sidebar.markdown('<div class="menu-title">☰ Menu</div>', unsafe_allow_html=True)
