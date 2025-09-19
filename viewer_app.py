@@ -108,12 +108,15 @@ def render_metal_prices_page():
 
     sel_label = st.selectbox("Commodity", labels, index=0, key="commodity-select")
 
+    # --- Force a clean redraw when commodity changes (fixes “updates only on hover”) ---
     _last_sel = st.session_state.get("_last_sel")
     if _last_sel is None:
         st.session_state["_last_sel"] = sel_label
     elif sel_label != _last_sel:
-        st.session_state["commodity_select_changed"] = True
+        # bump a global render version and remember the new selection, then rerun once
         st.session_state["_last_sel"] = sel_label
+        st.session_state["chart_ver_global"] = st.session_state.get("chart_ver_global", 0) + 1
+        st.rerun()
 
     slug = slugs[labels.index(sel_label)]
 
@@ -251,9 +254,13 @@ def render_metal_prices_page():
         )
     )
 
-    scrap_chart_key = f"scrap-{slug}-{start.isoformat()}-{end.isoformat()}-{ver}"
+    # include a global render version to force a full widget remount after commodity change
+    global_ver = st.session_state.get("chart_ver_global", 0)
+    scrap_chart_key = f"scrap-{slug}-{start.isoformat()}-{end.isoformat()}-{ver}-{global_ver}"
+
+    placeholder = st.empty()
     chart = _tidy((bars_actual + line_forecast + line_actual).properties(height=430)).resolve_scale(x="shared", y="shared")
-    st.altair_chart(chart, use_container_width=True, key=scrap_chart_key)
+    placeholder.altair_chart(chart, use_container_width=True, key=scrap_chart_key)
 
     # Summary
     def _fmt_money(x: float) -> str:
@@ -417,7 +424,7 @@ def render_billet_prices_page():
     if btn_clear:
         st.session_state[kq_from] = q_start_def
         st.session_state[kq_to]   = q_end_def
-        st.session_state[ver2 + 1] = ver2 + 1  # bump version so widget keys change
+        st.session_state[kq_ver] = ver2 + 1
         st.rerun()
 
     if btn_go:
@@ -504,7 +511,8 @@ def render_billet_prices_page():
         )
     )
 
-    billet_chart_key = f"billet-{series_label}-{q_from}-{q_to}-{ver2}"
+    global_ver = st.session_state.get("chart_ver_global", 0)
+    billet_chart_key = f"billet-{series_label}-{q_from}-{q_to}-{ver2}-{global_ver}"
     chart2 = _tidy((bars2 + line2_forecast + line2_actual).properties(height=430)).resolve_scale(x="shared", y="shared")
     st.altair_chart(chart2, use_container_width=True, key=billet_chart_key)
 
