@@ -49,13 +49,14 @@ st.markdown(
       }
       .summary-box b{ color:#0B5CAB; }
 
+      /* Sidebar look */
       .menu-title{ font-weight:800; font-size:16px; margin: 6px 0 8px; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# ---------------- Helpers shared by all pages ----------------
+# ---------------- Helpers shared by both pages ----------------
 def _tidy(chart: alt.Chart) -> alt.Chart:
     return (
         chart
@@ -64,7 +65,6 @@ def _tidy(chart: alt.Chart) -> alt.Chart:
         .configure_axis(labelPadding=8, titlePadding=10, labelFontSize=12, titleFontSize=12)
         .configure_axisX(labelAngle=0)
     )
-
 
 def _forecast_series(y: pd.Series, periods: int, seasonal_periods: int) -> pd.Series:
     if len(y) < 3:
@@ -86,12 +86,10 @@ def _forecast_series(y: pd.Series, periods: int, seasonal_periods: int) -> pd.Se
             pass
     return pd.Series([float(y.iloc[-1])] * periods)
 
-
 def _bar_size(n: int) -> int:
     approx_width = 1100
     size = int(approx_width / max(1, n) * 0.65)
     return max(8, min(42, size))
-
 
 # ---------------- Page 1: Metal Prices (Commodity) ----------------
 def render_metal_prices_page():
@@ -315,7 +313,6 @@ def render_metal_prices_page():
         unsafe_allow_html=True,
     )
 
-
 # ---------------- Page 2: Billet Prices ----------------
 def render_billet_prices_page():
     st.markdown('<div class="title">Billet Prices</div>', unsafe_allow_html=True)
@@ -488,7 +485,7 @@ def render_billet_prices_page():
     plot_all = pd.concat([b_act, billet_fc_df], ignore_index=True)
 
     actual_only = plot_all[plot_all["is_forecast"] == False]
-    forecast_only = plot_all[plot_all["is_forecast"] == True]
+    forecast_only = plot_all[plot_all["is_forecast"] == True]   # ✅ fixed filtering
 
     domain_order_q = billet_df["QuarterLabel"].tolist() + [q for q in future_quarters if q not in set(billet_df["QuarterLabel"])]
 
@@ -536,6 +533,7 @@ def render_billet_prices_page():
     global_ver = st.session_state.get("chart_ver_global", 0)
     billet_chart_key = f"billet-{series_label}-{q_from}-{q_to}-{ver2}-{global_ver}"
 
+    # Fresh mount to avoid stale Vega view (fixes “updates only on hover”)
     placeholder = st.empty()
     chart2 = _tidy((bars2 + line2_forecast + line2_actual).properties(height=430)).resolve_scale(x="shared", y="shared")
     placeholder.altair_chart(chart2, use_container_width=True, key=billet_chart_key)
@@ -587,9 +585,17 @@ def render_billet_prices_page():
         unsafe_allow_html=True,
     )
 
-
-# ---------------- Page 3: Grade Prices (robust) ----------------
+# ---------------- Page 3: Grade Prices ----------------
 def render_grade_prices_page():
+    """
+    NEW REQUIREMENT:
+    - Read file 'Grade prices.xlsx'
+    - There are 3 sheets. Cell A1 of each sheet contains the display name:
+      e.g. "42CrMo4 / En19 / 4140", "SAE 8620", "EN353"
+    - Show a single dropdown (like Metal Prices page) with those names.
+    - When a grade is selected, read that sheet's monthly data and render chart/summary,
+      keeping the same look & behavior (date range filters, tooltips, forecast).
+    """
     st.markdown('<div class="title">Grade Prices</div>', unsafe_allow_html=True)
 
     BASE_DIR = Path(__file__).parent.resolve()
@@ -605,34 +611,7 @@ def render_grade_prices_page():
                 return p
         return None
 
-    def _detect_structure(df: pd.DataFrame) -> dict:
-        cols = list(df.columns)
-
-        # Price column: prefer names; else most numeric
-        price_col = next((c for c in cols if re.search(r"(price|cost|rate)", str(c), re.I)), None)
-        if price_col is None:
-            numeric_counts = {}
-            for c in cols:
-                s = pd.to_numeric(df[c], errors="coerce")
-                numeric_counts[c] = s.notna().sum()
-            if numeric_counts:
-                price_col = max(numeric_counts, key=numeric_counts.get)
-
-        # Quarterly?
-        for c in cols:
-            ser = df[c].astype(str)
-            if ser.str.contains(r"\bQ[1-4]\s*-?\s*\d{4}\b", case=False, na=False).mean() > 0.5:
-                return {"kind": "quarterly", "quarter_col": c, "price_col": price_col}
-
-        # Monthly (date-like)?
-        for c in cols:
-            as_dt = pd.to_datetime(df[c], errors="coerce", dayfirst=True)
-            if as_dt.notna().mean() > 0.5:
-                return {"kind": "monthly", "date_col": c, "price_col": price_col}
-
-        raise ValueError("Could not detect Month/Quarter column. Expected a Date/Month column or values like 'Q2 2025'.")
-
-    # Load workbook
+    # Load workbook and discover labels from A1 of each sheet
     src = _find_grade_file()
     if not src:
         st.error("Grade Excel not found. Put **Grade prices.xlsx** in `data/` or `data/current/` (or next to this file).")
@@ -644,208 +623,104 @@ def render_grade_prices_page():
         st.error(f"Could not open {src.name}: {e}. Ensure `openpyxl` is in requirements.txt.")
         st.stop()
 
-    sheet_name = xls.sheet_names[0]
-    raw = xls.parse(sheet_name=sheet_name)
-    raw.columns = [str(c).strip() for c in raw.columns]  # prevent 'Month ' type issues
+    # Read A1 labels using pandas (no extra deps): parse first cell without header
+    sheet_labels: Dict[str, str] = {}
+    for sh in xls.sheet_names:
+        tmp = xls.parse(sheet_name=sh, header=None, nrows=1, usecols="A")
+        val = tmp.iloc[0, 0]
+        label = str(val).strip() if pd.notna(val) else sh
+        sheet_labels[sh] = label
 
-    if raw.empty:
-        st.info("No rows in Grade prices sheet."); st.stop()
+    # Dropdown like Metal Prices
+    labels = [sheet_labels[s] for s in xls.sheet_names]
+    sel_label = st.selectbox("Grade", labels, index=0, key="grade-select")
+
+    # Force clean redraw when grade changes
+    _last_grade = st.session_state.get("_last_grade_sel")
+    if _last_grade is None:
+        st.session_state["_last_grade_sel"] = sel_label
+    elif sel_label != _last_grade:
+        st.session_state["_last_grade_sel"] = sel_label
+        st.session_state["chart_ver_global"] = st.session_state.get("chart_ver_global", 0) + 1
+        st.rerun()
+
+    # Map selected label back to sheet name
+    sel_sheet = xls.sheet_names[labels.index(sel_label)]
+    st.caption(f"Source: {src.name} • sheet: {sel_sheet} • A1: {sel_label}")
+
+    # --- Robustly read the sheet's table: try different header rows until we detect month+price
+    def _read_monthly_table(sheet: str) -> pd.DataFrame:
+        """
+        Try header at row 1, 2, 3 (0-based: 0,1,2). Return df with columns Month, Price.
+        """
+        for hdr in (0, 1, 2):
+            raw = xls.parse(sheet_name=sheet, header=hdr)
+            if raw.empty:
+                continue
+            # drop fully empty columns
+            raw = raw.loc[:, raw.notna().any(axis=0)]
+            raw.columns = [str(c).strip() for c in raw.columns]
+
+            # choose date-like column
+            date_col = None
+            for c in raw.columns:
+                dt = pd.to_datetime(raw[c], errors="coerce", dayfirst=True)
+                if dt.notna().mean() > 0.5:
+                    date_col = c
+                    raw[c] = dt
+                    break
+
+            # choose price-like column
+            price_col = next((c for c in raw.columns if re.search(r"(price|cost|rate)", c, re.I)), None)
+            if price_col is None:
+                # pick the most numeric column that isn't the date col
+                numeric_counts = {}
+                for c in raw.columns:
+                    if c == date_col:
+                        continue
+                    s = pd.to_numeric(raw[c], errors="coerce")
+                    numeric_counts[c] = s.notna().sum()
+                if numeric_counts:
+                    price_col = max(numeric_counts, key=numeric_counts.get)
+
+            if date_col is not None and price_col is not None:
+                df = raw[[date_col, price_col]].copy()
+                df.columns = ["Month", "Price"]
+                df["Month"] = pd.to_datetime(df["Month"], errors="coerce")
+                df["Price"] = pd.to_numeric(df["Price"], errors="coerce")
+                df = df.dropna(subset=["Month", "Price"]).sort_values("Month")
+                if not df.empty:
+                    return df
+
+        raise ValueError("Could not detect a valid Month and Price column. Ensure the sheet has a date/month column and a price column.")
 
     try:
-        meta = _detect_structure(raw)
-    except ValueError as e:
+        df = _read_monthly_table(sel_sheet)
+    except Exception as e:
         st.error(str(e)); st.stop()
 
-    price_col = meta.get("price_col")
-    if price_col is None:
-        st.error("Could not detect a price column. Add a 'Price/Cost/Rate' column, or keep only one numeric column.")
-        st.stop()
+    df["MonthLabel"] = df["Month"].dt.strftime("%b %y").str.upper()
 
-    st.caption(f"Source: {src.name} • sheet: {sheet_name}")
+    # ----- Filters (same UX as Metal)
+    DEFAULT_START = pd.to_datetime(df["Month"].min()).date()
+    DEFAULT_END   = pd.to_datetime(df["Month"].max()).date()
 
-    # ---- Monthly mode (like Metal Prices)
-    if meta["kind"] == "monthly":
-        df = raw[[meta["date_col"], price_col]].copy()
-        df.columns = ["Month", "Price"]  # canonical
-        df["Month"] = pd.to_datetime(df["Month"], errors="coerce")
-        df["Price"] = pd.to_numeric(df["Price"], errors="coerce")
-        df = df.dropna(subset=["Month", "Price"]).sort_values("Month")
-        df["MonthLabel"] = df["Month"].dt.strftime("%b %y").str.upper()
+    k_from = f"grade-month-from-{sel_sheet}"
+    k_to   = f"grade-month-to-{sel_sheet}"
+    st.session_state.setdefault(k_from, DEFAULT_START)
+    st.session_state.setdefault(k_to,   DEFAULT_END)
 
-        DEFAULT_START = pd.to_datetime(df["Month"].min()).date()
-        DEFAULT_END   = pd.to_datetime(df["Month"].max()).date()
+    ver_key = f"grade-month-ver-{sel_sheet}"
+    st.session_state.setdefault(ver_key, 0)
+    ver = st.session_state[ver_key]
 
-        k_from = "grade-month-from"; k_to = "grade-month-to"
-        st.session_state.setdefault(k_from, DEFAULT_START)
-        st.session_state.setdefault(k_to,   DEFAULT_END)
+    w_from = f"grade-from-{sel_sheet}-{ver}"
+    w_to   = f"grade-to-{sel_sheet}-{ver}"
 
-        ver_key = "grade-month-ver"
-        st.session_state.setdefault(ver_key, 0)
-        ver = st.session_state[ver_key]
-
-        w_from = f"grade-from-{ver}"; w_to = f"grade-to-{ver}"
-        with st.form(key=f"grade-form-monthly-{ver}", border=False):
-            c1, c2, c3, c4 = st.columns([2.6, 2.6, 0.6, 0.6], gap="small")
-            c1.date_input("From (DD/MM/YYYY)", st.session_state[k_from], key=w_from)
-            c2.date_input("To (DD/MM/YYYY)",   st.session_state[k_to],   key=w_to)
-            with c3:
-                st.markdown('<div style="height:30px;"></div>', unsafe_allow_html=True)
-                btn_go = st.form_submit_button("Search")
-            with c4:
-                st.markdown('<div style="height:30px;"></div>', unsafe_allow_html=True)
-                btn_clear = st.form_submit_button("Clear")
-
-        if btn_clear:
-            st.session_state[k_from] = DEFAULT_START
-            st.session_state[k_to]   = DEFAULT_END
-            st.session_state[ver_key] = ver + 1
-            st.rerun()
-
-        if btn_go:
-            sv = st.session_state[w_from]; ev = st.session_state[w_to]
-            if sv > ev:
-                st.error("From date must be ≤ To date."); st.stop()
-            st.session_state[k_from] = sv; st.session_state[k_to] = ev
-
-        start = st.session_state[k_from]; end = st.session_state[k_to]
-        f = df[(df["Month"].dt.date >= start) & (df["Month"].dt.date <= end)].copy()
-        if f.empty:
-            st.info("No rows in this range."); st.stop()
-
-        def _fmt_inr(v):
-            try:
-                return f"₹{float(v):,.0f}"
-            except Exception:
-                return str(v)
-        f["PriceTT"] = f["Price"].apply(_fmt_inr)
-
-        fc = _forecast_series(f["Price"].reset_index(drop=True), periods=3, seasonal_periods=12)
-        last_m = pd.to_datetime(f["Month"].max())
-        future_months = pd.date_range(last_m + pd.offsets.MonthBegin(1), periods=3, freq="MS")
-        fc_df = pd.DataFrame({
-            "Month": future_months,
-            "MonthLabel": future_months.strftime("%b %y").str.upper(),
-            "Price": fc.values,
-            "PriceTT": fc.apply(_fmt_inr).values,
-            "is_forecast": True,
-        })
-        f_act = f.copy(); f_act["is_forecast"] = False
-        plot_all = pd.concat([f_act, fc_df], ignore_index=True)
-        domain = f["MonthLabel"].tolist() + [m for m in fc_df["MonthLabel"].tolist() if m not in set(f["MonthLabel"])]
-
-        bars = (
-            alt.Chart(plot_all[plot_all["is_forecast"] == False])
-            .mark_bar(size=_bar_size(len(f_act)))
-            .encode(
-                x=alt.X("MonthLabel:N", title="Months", sort=domain,
-                        scale=alt.Scale(domain=domain, paddingOuter=0.35, paddingInner=0.45)),
-                y=alt.Y("Price:Q", title="Price", scale=alt.Scale(zero=False, nice=True)),
-                tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
-                         alt.Tooltip("PriceTT:N", title="Price")],
-            )
-        )
-        line_fc = (
-            alt.Chart(plot_all[plot_all["is_forecast"] == True])
-            .mark_line(point=True, strokeDash=[4,3])
-            .encode(
-                x=alt.X("MonthLabel:N", sort=domain,
-                        scale=alt.Scale(domain=domain, paddingOuter=0.35, paddingInner=0.45)),
-                y=alt.Y("Price:Q", scale=alt.Scale(zero=False, nice=True)),
-                tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
-                         alt.Tooltip("PriceTT:N", title="Price")],
-            )
-        )
-        line_actual = (
-            alt.Chart(plot_all[plot_all["is_forecast"] == False])
-            .mark_line(point=True)
-            .encode(
-                x=alt.X("MonthLabel:N", sort=domain,
-                        scale=alt.Scale(domain=domain, paddingOuter=0.35, paddingInner=0.45)),
-                y=alt.Y("Price:Q", scale=alt.Scale(zero=False, nice=True)),
-                tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
-                         alt.Tooltip("PriceTT:N", title="Price")],
-            )
-        )
-
-        global_ver = st.session_state.get("chart_ver_global", 0)
-        chart_key = f"grade-monthly-{start}-{end}-{ver}-{global_ver}"
-        placeholder = st.empty()
-        chart = _tidy((bars + line_fc + line_actual).properties(height=430)).resolve_scale(x="shared", y="shared")
-        placeholder.altair_chart(chart, use_container_width=True, key=chart_key)
-
-        # Summary
-        def _fmt_inr_money(x: float) -> str:
-            try:
-                return f"₹{x:,.0f}"
-            except Exception:
-                return str(x)
-
-        first_row = f.iloc[0]; last_row = f.iloc[-1]
-        s_price = float(first_row["Price"]); e_price = float(last_row["Price"])
-        s_mon = first_row["Month"].strftime("%b %Y"); e_mon = last_row["Month"].strftime("%b %Y")
-        chg_abs = e_price - s_price
-        chg_pct = (chg_abs / s_price * 100.0) if s_price else 0.0
-        arrow = "↑" if chg_abs > 0 else ("↓" if chg_abs < 0 else "→")
-        hi_idx = f["Price"].idxmax(); lo_idx = f["Price"].idxmin()
-        hi_price, hi_mon = float(f.loc[hi_idx, "Price"]), f.loc[hi_idx, "Month"].strftime("%b %Y")
-        lo_price, lo_mon = float(f.loc[lo_idx, "Price"]), f.loc[lo_idx, "Month"].strftime("%b %Y")
-        avg_price = float(f["Price"].mean()); rng = hi_price - lo_price; n = len(f)
-
-        st.markdown(
-            f"""
-            <div class="summary-box">
-              <div><b>{s_mon}</b> to <b>{e_mon}</b>: price moved from <b>{_fmt_inr_money(s_price)}</b> to <b>{_fmt_inr_money(e_price)}</b> ({arrow} {chg_abs:+.0f}, {chg_pct:+.2f}%).</div>
-              <div>Period high was <b>{_fmt_inr_money(hi_price)}</b> in <b>{hi_mon}</b>; low was <b>{_fmt_inr_money(lo_price)}</b> in <b>{lo_mon}</b> (range {_fmt_inr_money(rng)}).</div>
-              <div>Across <b>{n}</b> months, the average price was <b>{_fmt_inr_money(avg_price)}</b>. These details auto-update with your date filters.</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        pairs = [f"{d.strftime('%b %Y')}: {_fmt_inr_money(v)}" for d, v in zip(future_months, fc)]
-        st.markdown(
-            f"""
-            <div class="summary-box">
-              <div><b>Forecast (next 3 months)</b> — {', '.join(pairs)}.</div>
-              <div>Method: Holt–Winters (additive trend{', seasonal (12)' if _HAS_STATSMODELS and len(f)>=24 else ''}); fallback = last value.</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        return
-
-    # ---- Quarterly mode (like Billet Prices)
-    dfq = raw[[meta["quarter_col"], price_col]].copy()
-    dfq.columns = ["Quarter", "Price"]
-    dfq["Quarter"] = dfq["Quarter"].astype(str).str.replace("-", " ", regex=False).str.strip()
-
-    def _q_order(qs: str) -> int:
-        m = re.search(r"Q(\d)\s*(\d{4})", qs, flags=re.I)
-        if not m: return 0
-        q = int(m.group(1)); y = int(m.group(2))
-        return y * 10 + q
-
-    dfq["QuarterOrder"] = dfq["Quarter"].apply(_q_order)
-    dfq = dfq.sort_values("QuarterOrder")
-    dfq["QuarterLabel"] = dfq["Quarter"]
-    dfq["Price"] = pd.to_numeric(dfq["Price"], errors="coerce")
-    dfq = dfq.dropna(subset=["Price"])
-
-    quarters = dfq["QuarterLabel"].tolist()
-    if not quarters:
-        st.info("No quarters detected in Grade prices."); st.stop()
-
-    k_from = "grade-q-from"; k_to = "grade-q-to"
-    st.session_state.setdefault(k_from, quarters[0])
-    st.session_state.setdefault(k_to, quarters[-1])
-
-    ver = st.session_state.get("grade-q-ver", 0)
-    w_from = f"grade-q-from-{ver}"; w_to = f"grade-q-to-{ver}"
-
-    with st.form(key=f"grade-form-quarterly-{ver}", border=False):
+    with st.form(key=f"grade-form-{sel_sheet}-{ver}", border=False):
         c1, c2, c3, c4 = st.columns([2.6, 2.6, 0.6, 0.6], gap="small")
-        c1.selectbox("From Quarter", options=quarters, index=quarters.index(st.session_state[k_from]), key=w_from)
-        c2.selectbox("To Quarter",   options=quarters, index=quarters.index(st.session_state[k_to]), key=w_to)
+        c1.date_input("From (DD/MM/YYYY)", st.session_state[k_from], key=w_from)
+        c2.date_input("To (DD/MM/YYYY)",   st.session_state[k_to],   key=w_to)
         with c3:
             st.markdown('<div style="height:30px;"></div>', unsafe_allow_html=True)
             btn_go = st.form_submit_button("Search")
@@ -854,135 +729,125 @@ def render_grade_prices_page():
             btn_clear = st.form_submit_button("Clear")
 
     if btn_clear:
-        st.session_state[k_from] = quarters[0]
-        st.session_state[k_to]   = quarters[-1]
-        st.session_state["grade-q-ver"] = ver + 1
+        st.session_state[k_from] = DEFAULT_START
+        st.session_state[k_to]   = DEFAULT_END
+        st.session_state[ver_key] = ver + 1
         st.rerun()
 
     if btn_go:
-        sf = st.session_state[w_from]; stv = st.session_state[w_to]
-        if quarters.index(sf) > quarters.index(stv):
-            st.error("From Quarter must be ≤ To Quarter."); st.stop()
-        st.session_state[k_from] = sf; st.session_state[k_to] = stv
+        sv = st.session_state[w_from]; ev = st.session_state[w_to]
+        if sv > ev:
+            st.error("From date must be ≤ To date."); st.stop()
+        st.session_state[k_from] = sv; st.session_state[k_to] = ev
 
-    q_from = st.session_state[k_from]; q_to = st.session_state[k_to]
-    dfq = dfq.iloc[quarters.index(q_from):quarters.index(q_to)+1].copy()
-    if dfq.empty:
-        st.info("No rows in this quarter range."); st.stop()
+    start = st.session_state[k_from]; end = st.session_state[k_to]
+    f = df[(df["Month"].dt.date >= start) & (df["Month"].dt.date <= end)].copy()
+    if f.empty:
+        st.info("No rows in this range."); st.stop()
 
+    # ----- Chart (same style as Metal page)
     def _fmt_inr(v):
         try:
             return f"₹{float(v):,.0f}"
         except Exception:
             return str(v)
 
-    dfq["PriceTT"] = dfq["Price"].apply(_fmt_inr)
+    f["PriceTT"] = f["Price"].apply(_fmt_inr)
 
-    fc = _forecast_series(dfq["Price"].reset_index(drop=True), periods=2, seasonal_periods=4)
-
-    def _next_quarters(last_q_label: str, k: int = 2) -> list[str]:
-        m = re.search(r"Q(\d)\s+(\d{4})", last_q_label)
-        if not m: return []
-        q = int(m.group(1)); y = int(m.group(2))
-        out = []
-        for _ in range(k):
-            q = 1 if q == 4 else q + 1
-            if q == 1: y += 1
-            out.append(f"Q{q} {y}")
-        return out
-
-    future_quarters = _next_quarters(dfq["QuarterLabel"].iloc[-1], 2)
+    last_m = pd.to_datetime(f["Month"].max())
+    future_months = pd.date_range(last_m + pd.offsets.MonthBegin(1), periods=3, freq="MS")
+    fc = _forecast_series(f["Price"].reset_index(drop=True), periods=3, seasonal_periods=12)
     fc_df = pd.DataFrame({
-        "QuarterLabel": future_quarters,
+        "Month": future_months,
+        "MonthLabel": future_months.strftime("%b %y").str.upper(),
         "Price": fc.values,
         "PriceTT": fc.apply(_fmt_inr).values,
         "is_forecast": True,
     })
 
-    act = dfq.copy(); act["is_forecast"] = False
-    plot_all = pd.concat([act, fc_df], ignore_index=True)
-    domain = dfq["QuarterLabel"].tolist() + [q for q in future_quarters if q not in set(dfq["QuarterLabel"])]
+    f_act = f.copy(); f_act["is_forecast"] = False
+    plot_all = pd.concat([f_act, fc_df], ignore_index=True)
+    domain = f["MonthLabel"].tolist() + [m for m in fc_df["MonthLabel"].tolist() if m not in set(f["MonthLabel"])]
 
     bars = (
         alt.Chart(plot_all[plot_all["is_forecast"] == False])
-        .mark_bar(size=_bar_size(len(act)))
+        .mark_bar(size=_bar_size(len(f_act)))
         .encode(
-            x=alt.X("QuarterLabel:N", title="Quarter", sort=domain,
+            x=alt.X("MonthLabel:N", title="Months", sort=domain,
                     scale=alt.Scale(domain=domain, paddingOuter=0.35, paddingInner=0.45)),
-            y=alt.Y("Price:Q", title="Price per MT", scale=alt.Scale(zero=False, nice=True)),
-            tooltip=[alt.Tooltip("QuarterLabel:N", title="Quarter"),
-                     alt.Tooltip("PriceTT:N",      title="Price")],
+            y=alt.Y("Price:Q", title="Price", scale=alt.Scale(zero=False, nice=True)),
+            tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
+                     alt.Tooltip("PriceTT:N", title="Price")],
         )
     )
     line_fc = (
         alt.Chart(plot_all[plot_all["is_forecast"] == True])
         .mark_line(point=True, strokeDash=[4,3])
         .encode(
-            x=alt.X("QuarterLabel:N", sort=domain,
+            x=alt.X("MonthLabel:N", sort=domain,
                     scale=alt.Scale(domain=domain, paddingOuter=0.35, paddingInner=0.45)),
             y=alt.Y("Price:Q", scale=alt.Scale(zero=False, nice=True)),
-            tooltip=[alt.Tooltip("QuarterLabel:N", title="Quarter"),
-                     alt.Tooltip("PriceTT:N",      title="Price")],
+            tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
+                     alt.Tooltip("PriceTT:N", title="Price")],
         )
     )
     line_actual = (
         alt.Chart(plot_all[plot_all["is_forecast"] == False])
         .mark_line(point=True)
         .encode(
-            x=alt.X("QuarterLabel:N", sort=domain,
+            x=alt.X("MonthLabel:N", sort=domain,
                     scale=alt.Scale(domain=domain, paddingOuter=0.35, paddingInner=0.45)),
             y=alt.Y("Price:Q", scale=alt.Scale(zero=False, nice=True)),
-            tooltip=[alt.Tooltip("QuarterLabel:N", title="Quarter"),
-                     alt.Tooltip("PriceTT:N",      title="Price")],
+            tooltip=[alt.Tooltip("MonthLabel:N", title="Month"),
+                     alt.Tooltip("PriceTT:N", title="Price")],
         )
     )
 
     global_ver = st.session_state.get("chart_ver_global", 0)
-    chart_key = f"grade-quarterly-{q_from}-{q_to}-{ver}-{global_ver}"
+    chart_key = f"grade-{sel_sheet}-{start}-{end}-{ver}-{global_ver}"
     placeholder = st.empty()
     chart = _tidy((bars + line_fc + line_actual).properties(height=430)).resolve_scale(x="shared", y="shared")
     placeholder.altair_chart(chart, use_container_width=True, key=chart_key)
 
-    # Summary
+    # ----- Summary (same style)
     def _fmt_inr_money(x: float) -> str:
         try:
             return f"₹{x:,.0f}"
         except Exception:
-            return f"₹{x}"
+            return str(x)
 
-    first_row = dfq.iloc[0]; last_row = dfq.iloc[-1]
+    first_row = f.iloc[0]; last_row = f.iloc[-1]
     s_price = float(first_row["Price"]); e_price = float(last_row["Price"])
-    s_q = first_row["QuarterLabel"]; e_q = last_row["QuarterLabel"]
+    s_mon = first_row["Month"].strftime("%b %Y"); e_mon = last_row["Month"].strftime("%b %Y")
     chg_abs = e_price - s_price
     chg_pct = (chg_abs / s_price * 100.0) if s_price else 0.0
     arrow = "↑" if chg_abs > 0 else ("↓" if chg_abs < 0 else "→")
-    hi_idx = dfq["Price"].idxmax(); lo_idx = dfq["Price"].idxmin()
-    hi_price, hi_q = float(dfq.loc[hi_idx, "Price"]), dfq.loc[hi_idx, "QuarterLabel"]
-    lo_price, lo_q = float(dfq.loc[lo_idx, "Price"]), dfq.loc[lo_idx, "QuarterLabel"]
-    avg_price = float(dfq["Price"].mean()); rng = hi_price - lo_price; n = len(dfq)
+    hi_idx = f["Price"].idxmax(); lo_idx = f["Price"].idxmin()
+    hi_price, hi_mon = float(f.loc[hi_idx, "Price"]), f.loc[hi_idx, "Month"].strftime("%b %Y")
+    lo_price, lo_mon = float(f.loc[lo_idx, "Price"]), f.loc[lo_idx, "Month"].strftime("%b %Y")
+    avg_price = float(f["Price"].mean()); rng = hi_price - lo_price; n = len(f)
 
     st.markdown(
         f"""
         <div class="summary-box">
-          <div><b>{s_q}</b> to <b>{e_q}</b>: price moved from <b>{_fmt_inr_money(s_price)}</b> to <b>{_fmt_inr_money(e_price)}</b> ({arrow} {chg_abs:+.0f}, {chg_pct:+.2f}%).</div>
-          <div>Period high was <b>{_fmt_inr_money(hi_price)}</b> in <b>{hi_q}</b>; low was <b>{_fmt_inr_money(lo_price)}</b> in <b>{lo_q}</b> (range {_fmt_inr_money(rng)}).</div>
-          <div>Across <b>{n}</b> quarters, the average price was <b>{_fmt_inr_money(avg_price)}</b>. These details auto-update with your quarter filters.</div>
+          <div><b>{s_mon}</b> to <b>{e_mon}</b>: price moved from <b>{_fmt_inr_money(s_price)}</b> to <b>{_fmt_inr_money(e_price)}</b> ({arrow} {chg_abs:+.0f}, {chg_pct:+.2f}%).</div>
+          <div>Period high was <b>{_fmt_inr_money(hi_price)}</b> in <b>{hi_mon}</b>; low was <b>{_fmt_inr_money(lo_price)}</b> in <b>{lo_mon}</b> (range {_fmt_inr_money(rng)}).</div>
+          <div>Across <b>{n}</b> months, the average price was <b>{_fmt_inr_money(avg_price)}</b>. These details auto-update with your date filters.</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    pairs = [f"{q}: {_fmt_inr_money(v)}" for q, v in zip(future_quarters, fc)]
+    pairs = [f"{d.strftime('%b %Y')}: {_fmt_inr_money(v)}" for d, v in zip(future_months, fc)]
     st.markdown(
         f"""
         <div class="summary-box">
-          <div><b>Forecast (next 2 quarters)</b> — {', '.join(pairs)}.</div>
-          <div>Method: Holt–Winters (additive trend{', seasonal (4)' if _HAS_STATSMODELS and len(dfq)>=8 else ''}); fallback = last value.</div>
+          <div><b>Forecast (next 3 months)</b> — {', '.join(pairs)}.</div>
+          <div>Method: Holt–Winters (additive trend{', seasonal (12)' if _HAS_STATSMODELS and len(f)>=24 else ''}); fallback = last value.</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-
 
 # ---------------- Sidebar Navigation ----------------
 st.sidebar.markdown('<div class="menu-title">☰ Menu</div>', unsafe_allow_html=True)
