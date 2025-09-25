@@ -56,7 +56,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ---------------- Helpers shared by both pages ----------------
+# ---------------- Helpers shared by all pages ----------------
 def _tidy(chart: alt.Chart) -> alt.Chart:
     return (
         chart
@@ -485,7 +485,7 @@ def render_billet_prices_page():
     plot_all = pd.concat([b_act, billet_fc_df], ignore_index=True)
 
     actual_only = plot_all[plot_all["is_forecast"] == False]
-    forecast_only = plot_all[plot_all["is_forecast"] == True]   # ✅ fixed filtering
+    forecast_only = plot_all[plot_all["is_forecast"] == True]
 
     domain_order_q = billet_df["QuarterLabel"].tolist() + [q for q in future_quarters if q not in set(billet_df["QuarterLabel"])]
 
@@ -533,7 +533,6 @@ def render_billet_prices_page():
     global_ver = st.session_state.get("chart_ver_global", 0)
     billet_chart_key = f"billet-{series_label}-{q_from}-{q_to}-{ver2}-{global_ver}"
 
-    # Fresh mount to avoid stale Vega view (fixes “updates only on hover”)
     placeholder = st.empty()
     chart2 = _tidy((bars2 + line2_forecast + line2_actual).properties(height=430)).resolve_scale(x="shared", y="shared")
     placeholder.altair_chart(chart2, use_container_width=True, key=billet_chart_key)
@@ -585,17 +584,8 @@ def render_billet_prices_page():
         unsafe_allow_html=True,
     )
 
-# ---------------- Page 3: Grade Prices ----------------
+# ---------------- Page 3: Grade Prices (robust date parsing) ----------------
 def render_grade_prices_page():
-    """
-    NEW REQUIREMENT:
-    - Read file 'Grade prices.xlsx'
-    - There are 3 sheets. Cell A1 of each sheet contains the display name:
-      e.g. "42CrMo4 / En19 / 4140", "SAE 8620", "EN353"
-    - Show a single dropdown (like Metal Prices page) with those names.
-    - When a grade is selected, read that sheet's monthly data and render chart/summary,
-      keeping the same look & behavior (date range filters, tooltips, forecast).
-    """
     st.markdown('<div class="title">Grade Prices</div>', unsafe_allow_html=True)
 
     BASE_DIR = Path(__file__).parent.resolve()
@@ -611,7 +601,7 @@ def render_grade_prices_page():
                 return p
         return None
 
-    # Load workbook and discover labels from A1 of each sheet
+    # ---- workbook + labels from A1 of each sheet
     src = _find_grade_file()
     if not src:
         st.error("Grade Excel not found. Put **Grade prices.xlsx** in `data/` or `data/current/` (or next to this file).")
@@ -623,7 +613,6 @@ def render_grade_prices_page():
         st.error(f"Could not open {src.name}: {e}. Ensure `openpyxl` is in requirements.txt.")
         st.stop()
 
-    # Read A1 labels using pandas (no extra deps): parse first cell without header
     sheet_labels: Dict[str, str] = {}
     for sh in xls.sheet_names:
         tmp = xls.parse(sheet_name=sh, header=None, nrows=1, usecols="A")
@@ -631,11 +620,9 @@ def render_grade_prices_page():
         label = str(val).strip() if pd.notna(val) else sh
         sheet_labels[sh] = label
 
-    # Dropdown like Metal Prices
     labels = [sheet_labels[s] for s in xls.sheet_names]
     sel_label = st.selectbox("Grade", labels, index=0, key="grade-select")
 
-    # Force clean redraw when grade changes
     _last_grade = st.session_state.get("_last_grade_sel")
     if _last_grade is None:
         st.session_state["_last_grade_sel"] = sel_label
@@ -644,36 +631,39 @@ def render_grade_prices_page():
         st.session_state["chart_ver_global"] = st.session_state.get("chart_ver_global", 0) + 1
         st.rerun()
 
-    # Map selected label back to sheet name
     sel_sheet = xls.sheet_names[labels.index(sel_label)]
     st.caption(f"Source: {src.name} • sheet: {sel_sheet} • A1: {sel_label}")
 
-    # --- Robustly read the sheet's table: try different header rows until we detect month+price
+    # ---------- Robust date parser (handles Excel serials & text dates)
+    def _to_datetime_series(s: pd.Series) -> pd.Series:
+        s1 = pd.to_numeric(s, errors="coerce")
+        # Likely Excel serial date if typical range 20k-80k
+        if s1.notna().mean() > 0.5 and 20000 <= s1.median() <= 80000:
+            return pd.to_datetime(s1, unit="D", origin="1899-12-30")
+        # Otherwise try general parsing (dayfirst to support 01/07/2024 etc.)
+        return pd.to_datetime(s, errors="coerce", dayfirst=True)
+
+    # --- Read monthly table: try a few header rows to find Month + Price
     def _read_monthly_table(sheet: str) -> pd.DataFrame:
-        """
-        Try header at row 1, 2, 3 (0-based: 0,1,2). Return df with columns Month, Price.
-        """
         for hdr in (0, 1, 2):
             raw = xls.parse(sheet_name=sheet, header=hdr)
             if raw.empty:
                 continue
-            # drop fully empty columns
             raw = raw.loc[:, raw.notna().any(axis=0)]
             raw.columns = [str(c).strip() for c in raw.columns]
 
-            # choose date-like column
+            # date-like col
             date_col = None
             for c in raw.columns:
-                dt = pd.to_datetime(raw[c], errors="coerce", dayfirst=True)
-                if dt.notna().mean() > 0.5:
+                dt = _to_datetime_series(raw[c])
+                if dt.notna().mean() > 0.5:  # enough valid dates
                     date_col = c
                     raw[c] = dt
                     break
 
-            # choose price-like column
+            # price-like col
             price_col = next((c for c in raw.columns if re.search(r"(price|cost|rate)", c, re.I)), None)
             if price_col is None:
-                # pick the most numeric column that isn't the date col
                 numeric_counts = {}
                 for c in raw.columns:
                     if c == date_col:
@@ -686,13 +676,13 @@ def render_grade_prices_page():
             if date_col is not None and price_col is not None:
                 df = raw[[date_col, price_col]].copy()
                 df.columns = ["Month", "Price"]
-                df["Month"] = pd.to_datetime(df["Month"], errors="coerce")
+                df["Month"] = _to_datetime_series(df["Month"])
                 df["Price"] = pd.to_numeric(df["Price"], errors="coerce")
                 df = df.dropna(subset=["Month", "Price"]).sort_values("Month")
                 if not df.empty:
                     return df
 
-        raise ValueError("Could not detect a valid Month and Price column. Ensure the sheet has a date/month column and a price column.")
+        raise ValueError("Could not detect a valid Month and Price column. Ensure the sheet has a month/date column and a price column.")
 
     try:
         df = _read_monthly_table(sel_sheet)
@@ -745,7 +735,7 @@ def render_grade_prices_page():
     if f.empty:
         st.info("No rows in this range."); st.stop()
 
-    # ----- Chart (same style as Metal page)
+    # ----- Chart (identical settings to Metal)
     def _fmt_inr(v):
         try:
             return f"₹{float(v):,.0f}"
@@ -809,7 +799,7 @@ def render_grade_prices_page():
     chart = _tidy((bars + line_fc + line_actual).properties(height=430)).resolve_scale(x="shared", y="shared")
     placeholder.altair_chart(chart, use_container_width=True, key=chart_key)
 
-    # ----- Summary (same style)
+    # ----- Summary
     def _fmt_inr_money(x: float) -> str:
         try:
             return f"₹{x:,.0f}"
