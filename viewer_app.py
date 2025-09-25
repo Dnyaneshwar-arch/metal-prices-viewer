@@ -49,7 +49,6 @@ st.markdown(
       }
       .summary-box b{ color:#0B5CAB; }
 
-      /* Sidebar look */
       .menu-title{ font-weight:800; font-size:16px; margin: 6px 0 8px; }
     </style>
     """,
@@ -65,6 +64,7 @@ def _tidy(chart: alt.Chart) -> alt.Chart:
         .configure_axis(labelPadding=8, titlePadding=10, labelFontSize=12, titleFontSize=12)
         .configure_axisX(labelAngle=0)
     )
+
 
 def _forecast_series(y: pd.Series, periods: int, seasonal_periods: int) -> pd.Series:
     if len(y) < 3:
@@ -86,10 +86,12 @@ def _forecast_series(y: pd.Series, periods: int, seasonal_periods: int) -> pd.Se
             pass
     return pd.Series([float(y.iloc[-1])] * periods)
 
+
 def _bar_size(n: int) -> int:
     approx_width = 1100
     size = int(approx_width / max(1, n) * 0.65)
     return max(8, min(42, size))
+
 
 # ---------------- Page 1: Metal Prices (Commodity) ----------------
 def render_metal_prices_page():
@@ -313,6 +315,7 @@ def render_metal_prices_page():
         unsafe_allow_html=True,
     )
 
+
 # ---------------- Page 2: Billet Prices ----------------
 def render_billet_prices_page():
     st.markdown('<div class="title">Billet Prices</div>', unsafe_allow_html=True)
@@ -485,7 +488,7 @@ def render_billet_prices_page():
     plot_all = pd.concat([b_act, billet_fc_df], ignore_index=True)
 
     actual_only = plot_all[plot_all["is_forecast"] == False]
-    forecast_only = plot_all[plot_all["is_forecast"] == True]   # ✅ fixed filtering
+    forecast_only = plot_all[plot_all["is_forecast"] == True]
 
     domain_order_q = billet_df["QuarterLabel"].tolist() + [q for q in future_quarters if q not in set(billet_df["QuarterLabel"])]
 
@@ -533,7 +536,6 @@ def render_billet_prices_page():
     global_ver = st.session_state.get("chart_ver_global", 0)
     billet_chart_key = f"billet-{series_label}-{q_from}-{q_to}-{ver2}-{global_ver}"
 
-    # Fresh mount to avoid stale Vega view (fixes “updates only on hover”)
     placeholder = st.empty()
     chart2 = _tidy((bars2 + line2_forecast + line2_actual).properties(height=430)).resolve_scale(x="shared", y="shared")
     placeholder.altair_chart(chart2, use_container_width=True, key=billet_chart_key)
@@ -585,7 +587,8 @@ def render_billet_prices_page():
         unsafe_allow_html=True,
     )
 
-# ---------------- Page 3: Grade Prices (NEW) ----------------
+
+# ---------------- Page 3: Grade Prices (robust) ----------------
 def render_grade_prices_page():
     st.markdown('<div class="title">Grade Prices</div>', unsafe_allow_html=True)
 
@@ -603,51 +606,33 @@ def render_grade_prices_page():
         return None
 
     def _detect_structure(df: pd.DataFrame) -> dict:
-        """Detect whether the sheet is monthly (date) or quarterly (Qn YYYY).
-        Returns dict with keys:
-          kind: 'monthly'|'quarterly'
-          date_col OR quarter_col
-          price_col
-        """
         cols = list(df.columns)
 
-        # Try to pick a price column by name first
-        price_col = next(
-            (c for c in cols if re.search(r"(price|cost|rate).*", str(c), re.I)),
-            None
-        )
-        # Fallback: most numeric column
+        # Price column: prefer names; else most numeric
+        price_col = next((c for c in cols if re.search(r"(price|cost|rate)", str(c), re.I)), None)
         if price_col is None:
-            numeric_counts = {c: pd.to_numeric(df[c], errors="coerce").notna().sum()
-                              for c in cols if df[c].dtype != "object" or pd.to_numeric(df[c], errors="coerce").notna().mean() > 0.5}
+            numeric_counts = {}
+            for c in cols:
+                s = pd.to_numeric(df[c], errors="coerce")
+                numeric_counts[c] = s.notna().sum()
             if numeric_counts:
                 price_col = max(numeric_counts, key=numeric_counts.get)
 
         # Quarterly?
-        quarter_col = None
         for c in cols:
-            series_str = df[c].astype(str)
-            m = series_str.str.contains(r"\bQ[1-4]\s*-?\s*\d{4}\b", case=False, na=False)
-            if m.mean() > 0.5:
-                quarter_col = c
-                break
+            ser = df[c].astype(str)
+            if ser.str.contains(r"\bQ[1-4]\s*-?\s*\d{4}\b", case=False, na=False).mean() > 0.5:
+                return {"kind": "quarterly", "quarter_col": c, "price_col": price_col}
 
-        if quarter_col is not None:
-            return {"kind": "quarterly", "quarter_col": quarter_col, "price_col": price_col}
-
-        # Monthly/date?
-        date_col = None
+        # Monthly (date-like)?
         for c in cols:
             as_dt = pd.to_datetime(df[c], errors="coerce", dayfirst=True)
             if as_dt.notna().mean() > 0.5:
-                date_col = c
-                break
-        if date_col is not None:
-            return {"kind": "monthly", "date_col": date_col, "price_col": price_col}
+                return {"kind": "monthly", "date_col": c, "price_col": price_col}
 
-        raise ValueError("Could not detect Month/Quarter column. Expected either a Date/Month column or 'Qn YYYY' text.")
+        raise ValueError("Could not detect Month/Quarter column. Expected a Date/Month column or values like 'Q2 2025'.")
 
-    # ---- Load and normalize data
+    # Load workbook
     src = _find_grade_file()
     if not src:
         st.error("Grade Excel not found. Put **Grade prices.xlsx** in `data/` or `data/current/` (or next to this file).")
@@ -659,8 +644,10 @@ def render_grade_prices_page():
         st.error(f"Could not open {src.name}: {e}. Ensure `openpyxl` is in requirements.txt.")
         st.stop()
 
-    sheet_name = xls.sheet_names[0]  # use first sheet by default
+    sheet_name = xls.sheet_names[0]
     raw = xls.parse(sheet_name=sheet_name)
+    raw.columns = [str(c).strip() for c in raw.columns]  # prevent 'Month ' type issues
+
     if raw.empty:
         st.info("No rows in Grade prices sheet."); st.stop()
 
@@ -671,27 +658,24 @@ def render_grade_prices_page():
 
     price_col = meta.get("price_col")
     if price_col is None:
-        st.error("Could not detect a price column. Name it like 'Price'/'Cost'/'Rate' or ensure it is the main numeric column.")
+        st.error("Could not detect a price column. Add a 'Price/Cost/Rate' column, or keep only one numeric column.")
         st.stop()
 
     st.caption(f"Source: {src.name} • sheet: {sheet_name}")
 
-    # -------- Monthly mode (like Metal Prices) --------
+    # ---- Monthly mode (like Metal Prices)
     if meta["kind"] == "monthly":
-        df = raw[[meta["date_col"], price_col]].rename(columns={meta["date_col"]: "Month", price_col: "Price"}).copy()
+        df = raw[[meta["date_col"], price_col]].copy()
+        df.columns = ["Month", "Price"]  # canonical
         df["Month"] = pd.to_datetime(df["Month"], errors="coerce")
-        df = df.dropna(subset=["Month", "Price"])
-        df = df.sort_values("Month")
-        df["MonthLabel"] = df["Month"].dt.strftime("%b %y").str.upper()
         df["Price"] = pd.to_numeric(df["Price"], errors="coerce")
-        df = df.dropna(subset=["Price"])
+        df = df.dropna(subset=["Month", "Price"]).sort_values("Month")
+        df["MonthLabel"] = df["Month"].dt.strftime("%b %y").str.upper()
 
-        # Default date range
         DEFAULT_START = pd.to_datetime(df["Month"].min()).date()
-        DEFAULT_END = pd.to_datetime(df["Month"].max()).date()
+        DEFAULT_END   = pd.to_datetime(df["Month"].max()).date()
 
-        k_from = "grade-month-from"
-        k_to   = "grade-month-to"
+        k_from = "grade-month-from"; k_to = "grade-month-to"
         st.session_state.setdefault(k_from, DEFAULT_START)
         st.session_state.setdefault(k_to,   DEFAULT_END)
 
@@ -699,9 +683,7 @@ def render_grade_prices_page():
         st.session_state.setdefault(ver_key, 0)
         ver = st.session_state[ver_key]
 
-        w_from = f"grade-from-{ver}"
-        w_to   = f"grade-to-{ver}"
-
+        w_from = f"grade-from-{ver}"; w_to = f"grade-to-{ver}"
         with st.form(key=f"grade-form-monthly-{ver}", border=False):
             c1, c2, c3, c4 = st.columns([2.6, 2.6, 0.6, 0.6], gap="small")
             c1.date_input("From (DD/MM/YYYY)", st.session_state[k_from], key=w_from)
@@ -735,10 +717,8 @@ def render_grade_prices_page():
                 return f"₹{float(v):,.0f}"
             except Exception:
                 return str(v)
-
         f["PriceTT"] = f["Price"].apply(_fmt_inr)
 
-        # Forecast next 3 months
         fc = _forecast_series(f["Price"].reset_index(drop=True), periods=3, seasonal_periods=12)
         last_m = pd.to_datetime(f["Month"].max())
         future_months = pd.date_range(last_m + pd.offsets.MonthBegin(1), periods=3, freq="MS")
@@ -834,8 +814,9 @@ def render_grade_prices_page():
         )
         return
 
-    # -------- Quarterly mode (like Billet Prices) --------
-    dfq = raw[[meta["quarter_col"], price_col]].rename(columns={meta["quarter_col"]: "Quarter", price_col: "Price"}).copy()
+    # ---- Quarterly mode (like Billet Prices)
+    dfq = raw[[meta["quarter_col"], price_col]].copy()
+    dfq.columns = ["Quarter", "Price"]
     dfq["Quarter"] = dfq["Quarter"].astype(str).str.replace("-", " ", regex=False).str.strip()
 
     def _q_order(qs: str) -> int:
@@ -897,7 +878,6 @@ def render_grade_prices_page():
 
     dfq["PriceTT"] = dfq["Price"].apply(_fmt_inr)
 
-    # Forecast next 2 quarters
     fc = _forecast_series(dfq["Price"].reset_index(drop=True), periods=2, seasonal_periods=4)
 
     def _next_quarters(last_q_label: str, k: int = 2) -> list[str]:
@@ -1003,11 +983,12 @@ def render_grade_prices_page():
         unsafe_allow_html=True,
     )
 
+
 # ---------------- Sidebar Navigation ----------------
 st.sidebar.markdown('<div class="menu-title">☰ Menu</div>', unsafe_allow_html=True)
 page = st.sidebar.radio(
     "Go to",
-    ["Metal Prices", "Billet Prices", "Grade Prices"],  # ← added
+    ["Metal Prices", "Billet Prices", "Grade Prices"],
     index=0,
     key="nav-radio",
     label_visibility="collapsed",
