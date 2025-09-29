@@ -7,21 +7,19 @@ from typing import Dict, List, Union, IO, Optional
 
 import pandas as pd
 
-# Use a robust base so it works whether you run from repo root or not
 BASE_DIR = Path(__file__).parent.resolve()
 DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = DATA_DIR / "config.json"
 
-# Support both correct name and common typo
 EXCEL_CANDIDATES = [
     DATA_DIR / "metal prices.xlsx",
-    DATA_DIR / "metal proices.xlsx",   # fallback if name is misspelled
+    DATA_DIR / "metal proices.xlsx",   # common typo
     DATA_DIR / "metal prices.xls",
 ]
 
 def _slugify(name: str) -> str:
     s = re.sub(r"\s+", "-", str(name).strip())
-    s = re.sub(r"[^A-Za-z0-9\\-]+", "", s)
+    s = re.sub(r"[^A-Za-z0-9\-]+", "", s)
     return s.lower()
 
 def _ensure_data_dir():
@@ -39,103 +37,129 @@ def _find_excel() -> Optional[Path]:
             return p
     return None
 
+def _detect_month_price(df: pd.DataFrame) -> tuple[str, str]:
+    cols = [str(c).strip() for c in df.columns]
+    df.columns = cols
+    month_col = next((c for c in cols if c.lower() == "month"), cols[0])
+    price_col = next(
+        (c for c in cols if re.search(r"(price|rate|cost)", c, re.I)),
+        (cols[1] if len(cols) > 1 else cols[0]),
+    )
+    return month_col, price_col
+
+def _clean_df(df: pd.DataFrame, month_col: str, price_col: str) -> pd.DataFrame:
+    out = df[[month_col, price_col]].rename(columns={month_col: "Month", price_col: "Price"})
+    out["Month"] = pd.to_datetime(out["Month"], errors="coerce", dayfirst=True, infer_datetime_format=True)
+    out["Price"] = pd.to_numeric(out["Price"], errors="coerce")
+    out = out.dropna(subset=["Month", "Price"]).sort_values("Month").reset_index(drop=True)
+    return out
+
+def _read_sheet_flex(xls: pd.ExcelFile, sheet_name: str) -> pd.DataFrame:
+    # Try headers on row 2 (header=1), then row 1, then row 3
+    for hdr in (1, 0, 2):
+        try:
+            df = pd.read_excel(xls, sheet_name=sheet_name, header=hdr)
+            if df.empty:
+                continue
+            mcol, pcol = _detect_month_price(df)
+            return _clean_df(df, mcol, pcol)
+        except Exception:
+            continue
+    # Fallback: treat first row as header
+    df = pd.read_excel(xls, sheet_name=sheet_name, header=None)
+    if df.empty:
+        return pd.DataFrame(columns=["Month", "Price"])
+    df.columns = df.iloc[0].astype(str).tolist()
+    df = df.iloc[1:]
+    mcol, pcol = _detect_month_price(df)
+    return _clean_df(df, mcol, pcol)
+
 def publish_workbook(file_obj: Union[str, Path, IO[bytes]]) -> Dict:
     """
-    Reads the Excel workbook and writes:
-      - one CSV per sheet -> data/<slug>.csv
-      - a config.json listing sheets, labels, and slugs
-    Assumes row 1 is headings (A1 capture), row 2 has table headers.
+    Create one CSV per sheet (data/<slug>.csv) and data/config.json.
+    Safe to run repeatedly (idempotent).
     """
     _ensure_data_dir()
-
     xls = pd.ExcelFile(file_obj)
     config: Dict[str, List[Dict]] = {"sheets": []}
-    written = []
+    written: List[str] = []
 
     for sheet_name in xls.sheet_names:
-        # Read top row to capture heading (A1 or first non-empty in row 1)
+        # A1 heading (for UI)
         try:
             top = pd.read_excel(xls, sheet_name=sheet_name, header=None, nrows=1)
             sheet_heading = _first_nonempty_in_row(top.iloc[0]) if not top.empty else ""
         except Exception:
             sheet_heading = ""
 
-        # Data starts on row 2 (header row)
-        df = pd.read_excel(xls, sheet_name=sheet_name, header=1)
-
-        cols = [str(c).strip() for c in df.columns]
-        df.columns = cols
-
-        # Detect Month/Price columns robustly
-        month_col = next((c for c in df.columns if c.lower().strip() == "month"), df.columns[0])
-        price_col = next(
-            (c for c in df.columns if re.search(r"(price|rate|cost)", str(c), re.I)),
-            (df.columns[1] if len(df.columns) > 1 else df.columns[0]),
-        )
-
-        df = df[[month_col, price_col]].rename(columns={month_col: "Month", price_col: "Price"})
-        df["Month"] = pd.to_datetime(df["Month"], errors="coerce", dayfirst=True, infer_datetime_format=True)
-        df = df.dropna(subset=["Month"])
-        df["Price"] = pd.to_numeric(df["Price"], errors="coerce")
-        df = df.dropna(subset=["Price"])
-        df = df.sort_values("Month").reset_index(drop=True)
-
+        df_clean = _read_sheet_flex(xls, sheet_name)
         slug = _slugify(sheet_name)
-        (DATA_DIR / f"{slug}.csv").write_text(df.to_csv(index=False), encoding="utf-8")
-
-        config["sheets"].append(
-            {
-                "sheet": sheet_name,
-                "label": sheet_name,
-                "slug": slug,
-                "heading": sheet_heading,  # saved for UI
-            }
-        )
+        (DATA_DIR / f"{slug}.csv").write_text(df_clean.to_csv(index=False), encoding="utf-8")
         written.append(f"{slug}.csv")
+
+        config["sheets"].append({
+            "sheet": sheet_name,
+            "label": sheet_name,
+            "slug": slug,
+            "heading": sheet_heading,
+        })
 
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
 
     return {"sheets_written": written, "config": CONFIG_PATH.name}
 
-def _ensure_published():
+def _excel_slug_map(src: Path) -> Dict[str, str]:
+    """sheet_name -> slug"""
+    xls = pd.ExcelFile(src)
+    return {sh: _slugify(sh) for sh in xls.sheet_names}
+
+def _force_publish_if_excel_present():
     """
-    If config.json (and CSVs) are not present, try to publish from the Excel.
+    If an Excel is present, always (re)publish CSVs + config.json so the UI matches the workbook.
     """
-    if CONFIG_PATH.exists():
-        return
     src = _find_excel()
     if src:
         publish_workbook(src)
 
 def load_config():
     """
-    Preferred flow: read config.json created by publish_workbook().
-    If it doesn't exist yet, auto-publish from the Excel (if present) and return the config.
+    Always prefer the current Excel if present; else fall back to existing config.json.
     """
     _ensure_data_dir()
-    if not CONFIG_PATH.exists():
-        _ensure_published()
+    src = _find_excel()
+    if src:
+        _force_publish_if_excel_present()
     if CONFIG_PATH.exists():
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             return json.load(f)
-    # Nothing available
     return {"sheets": []}
 
 def load_sheet(slug: str) -> pd.DataFrame:
     """
-    Load data for a given slug from its CSV.
-    If the CSV is missing (e.g., new Excel uploaded), try to (re)publish from Excel.
+    Load data for a given slug from its CSV. If missing/mismatched, rebuild from Excel
+    and try to find the right sheet by normalized name.
     """
     _ensure_data_dir()
-    p = DATA_DIR / f"{slug}.csv"
-    if not p.exists():
-        # Try re-publish from Excel (maybe added/renamed)
-        _ensure_published()
-    if not p.exists():
+    csv_path = DATA_DIR / f"{slug}.csv"
+    if not csv_path.exists():
+        # Try to rebuild from Excel and match slug to a sheet
+        src = _find_excel()
+        if src:
+            publish_workbook(src)
+            # Try direct again
+            if not csv_path.exists():
+                # Map normalized sheet names to slugs and try nearest match
+                slugs = set(_excel_slug_map(src).values())
+                # simple aliasing: replace dashes/underscores/spaces
+                alt = slug.replace("_", "-").replace(" ", "-").lower()
+                if alt in slugs:
+                    csv_path = DATA_DIR / f"{alt}.csv"
+
+    if not csv_path.exists():
         return pd.DataFrame(columns=["Month", "Price"])
 
-    df = pd.read_csv(p)
+    df = pd.read_csv(csv_path)
     df["Month"] = pd.to_datetime(df["Month"], errors="coerce")
     df["Price"] = pd.to_numeric(df["Price"], errors="coerce")
     df = df.dropna(subset=["Month", "Price"]).sort_values("Month").reset_index(drop=True)
