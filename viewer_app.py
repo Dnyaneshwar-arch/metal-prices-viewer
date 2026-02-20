@@ -311,27 +311,6 @@ def render_metal_prices_page():
         use_container_width=True,
         key=scrap_chart_key,
     )
-
-
-# ---------------- Sidebar Navigation ----------------
-st.sidebar.markdown('<div class="menu-title">☰ Menu</div>', unsafe_allow_html=True)
-
-page = st.sidebar.radio(
-    "Go to",
-    ["Metal Prices", "Billet Prices", "Grade Prices"],
-    index=0,
-    key="nav-radio",
-    label_visibility="collapsed",
-)
-
-if page == "Metal Prices":
-    render_metal_prices_page()
-elif page == "Billet Prices":
-    render_billet_prices_page()
-else:
-    render_grade_prices_page()
-
-
 # ---------------- Page 2: Billet Prices ----------------
 def render_billet_prices_page():
     st.markdown('<div class="title">Billet Prices</div>', unsafe_allow_html=True)
