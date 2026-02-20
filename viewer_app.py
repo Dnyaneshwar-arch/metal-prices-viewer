@@ -363,6 +363,8 @@ def render_billet_prices_page():
         "Billet Price (Electric Arc Furnace)",
     ]
 
+    # ---------- Helpers ----------
+
     def _find_billet_file() -> Path | None:
         for p in BILLET_FILE_CANDIDATES:
             if p.exists():
@@ -374,8 +376,10 @@ def render_billet_prices_page():
 
         for name in xls.sheet_names:
             n = name.lower()
+
             if want_blast and "blast" in n:
                 return name
+
             if not want_blast and ("electric" in n or "arc" in n):
                 return name
 
@@ -386,7 +390,9 @@ def render_billet_prices_page():
         src = _find_billet_file()
 
         if not src:
-            st.error("Billet Excel not found. Put **Billet cost.xlsx** in data/ or data/current/ (or next to this file).")
+            st.error(
+                "Billet Excel not found. Put **Billet cost.xlsx** in data/ or data/current/ (or next to this file)."
+            )
             st.stop()
 
         try:
@@ -400,12 +406,12 @@ def render_billet_prices_page():
 
         quarter_col = next(
             (c for c in raw.columns if re.search(r"q(u)?arter|qurter", str(c), re.I)),
-            None
+            None,
         )
 
         price_col = next(
             (c for c in raw.columns if re.search(r"billet.*(per)?.*mt", str(c), re.I)),
-            None
+            None,
         )
 
         if quarter_col is None or price_col is None:
@@ -437,6 +443,192 @@ def render_billet_prices_page():
 
         return df0
 
+    # ---------- Series Selector ----------
+
+    series_label = st.selectbox(
+        "Select Billet Series",
+        BILLET_SERIES_LABELS,
+        index=0,
+        key="billet-series",
+    )
+
+    _last_billet = st.session_state.get("_last_billet_series")
+
+    if _last_billet is None:
+        st.session_state["_last_billet_series"] = series_label
+
+    elif series_label != _last_billet:
+        st.session_state["_last_billet_series"] = series_label
+        st.session_state["chart_ver_global"] = (
+            st.session_state.get("chart_ver_global", 0) + 1
+        )
+        st.rerun()
+
+    billet_df_full = _load_billet_df(series_label)
+
+    if billet_df_full.empty:
+        st.info("No billet rows.")
+        st.stop()
+
+    quarters = billet_df_full["QuarterLabel"].tolist()
+
+    q_start_def = quarters[0]
+    q_end_def = quarters[-1]
+
+    kq_from = f"applied-billet-from-{series_label}"
+    kq_to = f"applied-billet-to-{series_label}"
+    kq_ver = f"billet-ver-{series_label}"
+
+    st.session_state.setdefault(kq_from, q_start_def)
+    st.session_state.setdefault(kq_to, q_end_def)
+    st.session_state.setdefault(kq_ver, 0)
+
+    ver2 = st.session_state[kq_ver]
+
+    wq_from = f"widget-billet-from-{series_label}-{ver2}"
+    wq_to = f"widget-billet-to-{series_label}-{ver2}"
+
+    def _safe_idx(val: str, opts: list[str], fallback_idx: int) -> int:
+        return opts.index(val) if val in opts else fallback_idx
+
+    idx_from = _safe_idx(st.session_state[kq_from], quarters, 0)
+    idx_to = _safe_idx(st.session_state[kq_to], quarters, len(quarters) - 1)
+
+    # ---------- Form ----------
+
+    with st.form(key=f"billet-form-{series_label}-{ver2}", border=False):
+
+        c1, c2, c3, c4 = st.columns([2.6, 2.6, 0.6, 0.6], gap="small")
+
+        c1.selectbox("From Quarter", quarters, index=idx_from, key=wq_from)
+        c2.selectbox("To Quarter", quarters, index=idx_to, key=wq_to)
+
+        with c3:
+            st.markdown('<div style="height:30px;"></div>', unsafe_allow_html=True)
+            btn_go = st.form_submit_button("Search")
+
+        with c4:
+            st.markdown('<div style="height:30px;"></div>', unsafe_allow_html=True)
+            btn_clear = st.form_submit_button("Clear")
+
+    if btn_clear:
+        st.session_state[kq_from] = q_start_def
+        st.session_state[kq_to] = q_end_def
+        st.session_state[kq_ver] = ver2 + 1
+        st.rerun()
+
+    if btn_go:
+        sel_from = st.session_state[wq_from]
+        sel_to = st.session_state[wq_to]
+
+        if quarters.index(sel_from) > quarters.index(sel_to):
+            st.error("From Quarter must be ≤ To Quarter.")
+            st.stop()
+
+        st.session_state[kq_from] = sel_from
+        st.session_state[kq_to] = sel_to
+
+    q_from = st.session_state[kq_from]
+    q_to = st.session_state[kq_to]
+
+    i_from = quarters.index(q_from)
+    i_to = quarters.index(q_to)
+
+    billet_df = billet_df_full.iloc[i_from:i_to + 1].copy()
+
+    if billet_df.empty:
+        st.info("No rows in this quarter range.")
+        st.stop()
+
+    # ---------- Formatting ----------
+
+    def _fmt_inr(n: float) -> str:
+        try:
+            return f"₹{float(n):,.0f}"
+        except Exception:
+            return f"₹{n}"
+
+    billet_df["PriceTT"] = billet_df["Price"].apply(_fmt_inr)
+
+    # ---------- Forecast ----------
+
+    billet_fc = _forecast_series(
+        billet_df["Price"].reset_index(drop=True),
+        periods=2,
+        seasonal_periods=4,
+    )
+
+    def _next_quarters(last_q_label: str, k: int = 2) -> list[str]:
+        m = re.search(r"Q(\d)\s+(\d{4})", last_q_label)
+        if not m:
+            return []
+
+        q = int(m.group(1))
+        y = int(m.group(2))
+
+        out = []
+        for _ in range(k):
+            q = 1 if q == 4 else q + 1
+            if q == 1:
+                y += 1
+            out.append(f"Q{q} {y}")
+
+        return out
+
+    future_quarters = _next_quarters(billet_df["QuarterLabel"].iloc[-1], 2)
+
+    billet_fc_df = pd.DataFrame({
+        "QuarterLabel": future_quarters,
+        "Price": billet_fc.values,
+        "PriceTT": billet_fc.apply(_fmt_inr).values,
+        "is_forecast": True,
+    })
+
+    b_act = billet_df.copy()
+    b_act["is_forecast"] = False
+
+    plot_all = pd.concat([b_act, billet_fc_df], ignore_index=True)
+
+    actual_only = plot_all[plot_all["is_forecast"] == False]
+    forecast_only = plot_all[plot_all["is_forecast"] == True]
+
+    domain_order_q = billet_df["QuarterLabel"].tolist() + [
+        q for q in future_quarters
+        if q not in set(billet_df["QuarterLabel"])
+    ]
+
+    # ---------- Chart ----------
+
+    bars2 = (
+        alt.Chart(actual_only)
+        .mark_bar(size=_bar_size(len(actual_only)))
+        .encode(
+            x=alt.X("QuarterLabel:N", sort=domain_order_q),
+            y=alt.Y("Price:Q", title="Billet cost per MT"),
+            tooltip=[
+                alt.Tooltip("QuarterLabel:N", title="Quarter"),
+                alt.Tooltip("PriceTT:N", title="Price"),
+            ],
+        )
+    )
+
+    line2_actual = (
+        alt.Chart(actual_only)
+        .mark_line(point=True)
+        .encode(x="QuarterLabel:N", y="Price:Q")
+    )
+
+    line2_forecast = (
+        alt.Chart(forecast_only)
+        .mark_line(point=True, strokeDash=[4, 3])
+        .encode(x="QuarterLabel:N", y="Price:Q")
+    )
+
+    chart2 = _tidy(
+        (bars2 + line2_actual + line2_forecast).properties(height=430)
+    ).resolve_scale(x="shared", y="shared")
+
+    st.altair_chart(chart2, use_container_width=True)
 
 # ---------------- Sidebar Navigation ----------------
 
