@@ -598,37 +598,40 @@ def render_billet_prices_page():
     ]
 
     # ---------- Chart ----------
-bars2 = (
-    alt.Chart(plot_all)
-    .mark_bar(size=_bar_size(len(plot_all)))
-    .encode(
-        x=alt.X(
-            "QuarterLabel:N",
-            title="Quarter",
-            sort=domain_order_q,
-            axis=alt.Axis(labelAngle=0),
-            scale=alt.Scale(
-                domain=domain_order_q,
-                paddingOuter=0.35,
-                paddingInner=0.45,
+    # ---------- Chart ----------
+
+    bars2 = (
+        alt.Chart(plot_all)
+        .mark_bar(size=_bar_size(len(plot_all)))
+        .encode(
+            x=alt.X(
+                "QuarterLabel:N",
+                title="Quarter",
+                sort=domain_order_q,
+                axis=alt.Axis(labelAngle=0),
+                scale=alt.Scale(
+                    domain=domain_order_q,
+                    paddingOuter=0.35,
+                    paddingInner=0.45,
+                ),
             ),
-        ),
-        y=alt.Y(
-            "Price:Q",
-            title="Billet cost per MT",
-            scale=alt.Scale(zero=False, nice=True),
-        ),
-        color=alt.condition(
-            alt.datum.is_forecast,
-            alt.value("#9CA3AF"),  # grey for forecast
-            alt.value("#1f77b4"),  # blue for actual
-        ),
-        tooltip=[
-            alt.Tooltip("QuarterLabel:N", title="Quarter"),
-            alt.Tooltip("PriceTT:N", title="Price"),
-        ],
+            y=alt.Y(
+                "Price:Q",
+                title="Billet cost per MT",
+                scale=alt.Scale(zero=False, nice=True),
+            ),
+            color=alt.condition(
+                alt.datum.is_forecast,
+                alt.value("#9CA3AF"),  # grey for forecast
+                alt.value("#1f77b4"),  # blue for actual
+            ),
+            tooltip=[
+                alt.Tooltip("QuarterLabel:N", title="Quarter"),
+                alt.Tooltip("PriceTT:N", title="Price"),
+            ],
+        )
     )
-)
+
     chart2 = _tidy(
         (bars2 + line2_actual + line2_forecast).properties(height=430)
     ).resolve_scale(x="shared", y="shared")
