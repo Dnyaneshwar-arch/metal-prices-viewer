@@ -876,7 +876,7 @@ def render_grade_prices_page():
 st.sidebar.markdown('<div class="menu-title">☰ Menu</div>', unsafe_allow_html=True)
 page = st.sidebar.radio(
     "Go to",
-    ["Metal Prices", "Billet Prices", "Grade Prices"],
+    ["Metal Prices", "Billet Prices"],
     index=0,
     key="nav-radio",
     label_visibility="collapsed",
