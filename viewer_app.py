@@ -337,12 +337,12 @@ def render_metal_prices_page():
         )
     )
 
-chart = _tidy(
-    (bars_actual + line_forecast + line_actual)
-    .properties(height=430)
-).resolve_scale(x="shared", y="shared")
+    chart = _tidy(
+        (bars_actual + line_forecast + line_actual)
+        .properties(height=430)
+    ).resolve_scale(x="shared", y="shared")
 
-st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(chart, use_container_width=True)
 
 # ---------------- Page 2: Billet Prices ----------------
 
@@ -650,13 +650,12 @@ def render_billet_prices_page():
             y=alt.Y("Price:Q"),
         )
     )
-chart = _tidy(
-    (bars_actual + line_forecast + line_actual)
-    .properties(height=430)
-).resolve_scale(x="shared", y="shared")
 
-st.altair_chart(chart, use_container_width=True)
-    
+    chart2 = _tidy(
+        (bars2 + line2_actual + line2_forecast).properties(height=430)
+    ).resolve_scale(x="shared", y="shared")
+
+    st.altair_chart(chart2, use_container_width=True)
 
 # ---------------- Sidebar Navigation ----------------
 
