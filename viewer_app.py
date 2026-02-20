@@ -629,18 +629,6 @@ bars2 = (
         ],
     )
 )
-    line2_actual = (
-        alt.Chart(actual_only)
-        .mark_line(point=True)
-        .encode(x="QuarterLabel:N", y="Price:Q")
-    )
-
-    line2_forecast = (
-        alt.Chart(forecast_only)
-        .mark_line(point=True, strokeDash=[4, 3])
-        .encode(x="QuarterLabel:N", y="Price:Q")
-    )
-
     chart2 = _tidy(
         (bars2 + line2_actual + line2_forecast).properties(height=430)
     ).resolve_scale(x="shared", y="shared")
