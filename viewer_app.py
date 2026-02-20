@@ -639,7 +639,7 @@ st.sidebar.markdown(
 
 page = st.sidebar.radio(
     "Go to",
-    ["Metal Prices", "Billet Prices", "Grade Prices"],
+    ["Metal Prices", "Billet Prices"],
     index=0,
     key="nav-radio",
     label_visibility="collapsed",
