@@ -599,6 +599,7 @@ def render_billet_prices_page():
 
     # ---------- Chart ----------
     # ---------- Chart ----------
+    # ---------- Chart ----------
 
     bars2 = (
         alt.Chart(plot_all)
@@ -622,13 +623,31 @@ def render_billet_prices_page():
             ),
             color=alt.condition(
                 alt.datum.is_forecast,
-                alt.value("#9CA3AF"),  # grey for forecast
-                alt.value("#1f77b4"),  # blue for actual
+                alt.value("#9CA3AF"),
+                alt.value("#1f77b4"),
             ),
             tooltip=[
                 alt.Tooltip("QuarterLabel:N", title="Quarter"),
                 alt.Tooltip("PriceTT:N", title="Price"),
             ],
+        )
+    )
+
+    line2_actual = (
+        alt.Chart(actual_only)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X("QuarterLabel:N", sort=domain_order_q),
+            y=alt.Y("Price:Q"),
+        )
+    )
+
+    line2_forecast = (
+        alt.Chart(forecast_only)
+        .mark_line(point=True, strokeDash=[4, 3])
+        .encode(
+            x=alt.X("QuarterLabel:N", sort=domain_order_q),
+            y=alt.Y("Price:Q"),
         )
     )
 
