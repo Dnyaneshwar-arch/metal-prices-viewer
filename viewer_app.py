@@ -140,16 +140,26 @@ def render_metal_prices_page():
     w_to = f"to-{slug}-{ver}"
 
     with st.form(key=f"filters-{slug}-{ver}", border=False):
-        c1, c2, c3, c4 = st.columns([2.6, 2.6, 0.6, 0.6], gap="small")
-        c1.date_input("From (DD/MM/YYYY)", def_start, key=w_from)
-        c2.date_input("To (DD/MM/YYYY)", def_end, key=w_to)
-        with c3:
-            st.markdown('<div style="height:30px;"></div>', unsafe_allow_html=True)
-            search = st.form_submit_button("Search")
-        with c4:
-            st.markdown('<div style="height:30px;"></div>', unsafe_allow_html=True)
-            clear = st.form_submit_button("Clear")
+    c1, c2, c3, c4, c5 = st.columns([2.6, 2.6, 0.8, 0.8, 1.2], gap="small")
 
+    # Date inputs (DD/MM/YYYY format)
+    c1.date_input("From", def_start, key=w_from, format="DD/MM/YYYY")
+    c2.date_input("To", def_end, key=w_to, format="DD/MM/YYYY")
+
+    with c3:
+        st.markdown('<div style="height:30px;"></div>', unsafe_allow_html=True)
+        search = st.form_submit_button("Search")
+
+    with c4:
+        st.markdown('<div style="height:30px;"></div>', unsafe_allow_html=True)
+        clear = st.form_submit_button("Clear")
+
+    with c5:
+        chart_type = st.selectbox(
+            "Chart Type",
+            ["Bar Chart", "Line Chart", "Pie Chart", "Area Chart"],
+            key=f"chart-type-{slug}"
+        )
     meta = next((m for m in sheets if m.get("slug") == slug or m.get("sheet") == slug), {})
     heading_text = meta.get("heading") or meta.get("label") or meta.get("sheet") or ""
     st.markdown(f'<div class="sheet-headline">{escape(str(heading_text))}</div>', unsafe_allow_html=True)
