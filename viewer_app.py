@@ -859,6 +859,7 @@ def render_grade_prices_page():
         </div>
         """,
         unsafe_allow_html=True,
+        
     )
 
     pairs = [f"{lbl}: {_fmt_inr_money(v)}" for lbl, v in zip(future_labels, fc_vals)]
@@ -886,5 +887,3 @@ if page == "Metal Prices":
     render_metal_prices_page()
 elif page == "Billet Prices":
     render_billet_prices_page()
-else:
-    render_grade_prices_page()
